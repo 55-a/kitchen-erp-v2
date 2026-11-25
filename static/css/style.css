@@ -1,0 +1,100 @@
+/* Общие стили Mini App. Цвета берутся из темы Telegram (светлая/тёмная) с запасными значениями. */
+:root {
+  --bg: var(--tg-theme-bg-color, #ffffff);
+  --bg2: var(--tg-theme-secondary-bg-color, #f2f3f5);
+  --text: var(--tg-theme-text-color, #1c1c1e);
+  --hint: var(--tg-theme-hint-color, #8e8e93);
+  --link: var(--tg-theme-link-color, #2a7ae2);
+  --accent: var(--tg-theme-button-color, #2a7ae2);
+  --accent-text: var(--tg-theme-button-text-color, #ffffff);
+  --danger: var(--tg-theme-destructive-text-color, #e5484d);
+  --ok: #2fa86b;
+  --radius: 12px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 12px 12px 88px;
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Noto Sans SC", sans-serif;
+  background: var(--bg2);
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1 { font-size: 20px; margin: 4px 0 12px; }
+h2 { font-size: 16px; margin: 16px 0 8px; }
+.hint { color: var(--hint); font-size: 13px; }
+.muted { color: var(--hint); }
+.right { text-align: right; }
+.danger { color: var(--danger); }
+.ok { color: var(--ok); }
+
+.banner {
+  background: #fff3cd; color: #664d03; padding: 10px 12px; border-radius: var(--radius);
+  margin-bottom: 12px; font-size: 14px;
+}
+
+/* Вкладки */
+.tabs { display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; }
+.tabs button {
+  flex: 1 0 auto; border: 0; padding: 9px 12px; border-radius: 10px; background: var(--bg);
+  color: var(--text); font-size: 14px; cursor: pointer; white-space: nowrap;
+}
+.tabs button.active { background: var(--accent); color: var(--accent-text); }
+
+/* Карточки */
+.card { background: var(--bg); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.stat { background: var(--bg); border-radius: var(--radius); padding: 12px; }
+.stat .label { color: var(--hint); font-size: 12px; text-transform: uppercase; letter-spacing: .02em; }
+.stat .value { font-size: 18px; font-weight: 600; margin-top: 4px; word-break: break-word; }
+.stat.wide { grid-column: span 2; }
+
+/* Формы */
+label { display: block; font-size: 13px; color: var(--hint); margin: 10px 0 4px; }
+input, select, textarea {
+  width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid transparent;
+  background: var(--bg2); color: var(--text); font-size: 16px; /* 16px — iOS не зумит поле */
+  outline: none;
+}
+input:focus, select:focus { border-color: var(--accent); }
+input.invalid, select.invalid { border-color: var(--danger); }
+.row { display: flex; gap: 10px; }
+.row > * { flex: 1; min-width: 0; }
+
+.btn {
+  display: block; width: 100%; border: 0; border-radius: 10px; padding: 12px; margin-top: 12px;
+  background: var(--accent); color: var(--accent-text); font-size: 15px; font-weight: 600; cursor: pointer;
+}
+.btn.secondary { background: var(--bg2); color: var(--link); }
+.btn:disabled { opacity: .55; cursor: default; }
+.btn-sm { border: 0; border-radius: 8px; padding: 7px 10px; font-size: 13px; cursor: pointer; background: var(--bg2); color: var(--text); }
+.btn-sm.primary { background: var(--accent); color: var(--accent-text); }
+
+/* Таблицы и списки */
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; color: var(--hint); font-weight: 500; font-size: 12px; padding: 6px 4px; }
+td { padding: 8px 4px; border-top: 1px solid var(--bg2); vertical-align: top; }
+.list-item { display: flex; justify-content: space-between; gap: 8px; padding: 10px 0; border-top: 1px solid var(--bg2); }
+.list-item:first-child { border-top: 0; }
+.list-item .title { font-weight: 500; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; background: var(--bg2); color: var(--hint); }
+.badge.danger { background: rgba(229, 72, 77, .12); color: var(--danger); }
+.badge.ok { background: rgba(47, 168, 107, .12); color: var(--ok); }
+
+.empty { text-align: center; color: var(--hint); padding: 24px 8px; }
+.loader { text-align: center; color: var(--hint); padding: 24px; }
+
+/* Уведомления */
+.toast {
+  position: fixed; left: 12px; right: 12px; bottom: 16px; padding: 12px 14px; border-radius: var(--radius);
+  background: #1c1c1e; color: #fff; font-size: 14px; white-space: pre-line;
+  transform: translateY(150%); transition: transform .25s ease; z-index: 1000;
+}
+.toast.show { transform: translateY(0); }
+.toast.error { background: var(--danger); }
+.toast.ok { background: var(--ok); }
+
+.chart-box { position: relative; height: 240px; }

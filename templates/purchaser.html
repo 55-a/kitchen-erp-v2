@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Kuxnya NVGR — Purchaser</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <!--
+    ИСПРАВЛЕННЫЕ БАГИ (из технического обзора):
+    1. Прогресс показывается через tg.MainButton.showProgress(), кнопка блокируется на время
+       запроса и ВСЕГДА разблокируется в finally (раньше "зависала" после ошибки).
+    2. Товар проверяется на сервере: если его нет на складе — API отвечает 400, а форма
+       показывает ошибку (раньше закупка "сохранялась" молча).
+    3. Сообщение об успехе показывается ТОЛЬКО после успешного ответа сервера (await).
+    4. Все запросы — по относительным путям /api/... (см. static/js/app.js).
+  -->
+  <h1 data-i18n="btn_new_purchase"></h1>
+
+  <div class="card">
+    <button class="btn secondary" id="ai-btn" type="button" data-i18n="ai_scan" style="margin-top:0"></button>
+    <input id="ai-file" type="file" accept="image/*" hidden>
+    <div id="ai-result" hidden>
+      <h2 data-i18n="ai_items"></h2>
+      <div id="ai-items"></div>
+    </div>
+  </div>
+
+  <form class="card" id="purchase-form" novalidate>
+    <label for="product" data-i18n="product"></label>
+    <select id="product" required></select>
+
+    <div class="row">
+      <div>
+        <label for="quantity" data-i18n="quantity"></label>
+        <input id="quantity" type="number" inputmode="decimal" min="0" step="any" required>
+      </div>
+      <div>
+        <label for="unit" data-i18n="unit"></label>
+        <select id="unit">
+          <option value="kg">kg</option>
+          <option value="g">g</option>
+          <option value="l">l</option>
+          <option value="ml">ml</option>
+          <option value="pcs">pcs</option>
+        </select>
+      </div>
+    </div>
+
+    <label for="total" data-i18n="total_price"></label>
+    <input id="total" type="number" inputmode="decimal" min="0" step="any" required>
+
+    <div class="row">
+      <div>
+        <label for="payment" data-i18n="payment_method"></label>
+        <select id="payment">
+          <option value="cash" data-i18n="cash"></option>
+          <option value="card" data-i18n="card"></option>
+          <option value="transfer" data-i18n="transfer"></option>
+        </select>
+      </div>
+      <div>
+        <label for="date" data-i18n="date"></label>
+        <input id="date" type="date" required>
+      </div>
+    </div>
+    <!-- Запасная кнопка вне Telegram; внутри Telegram используется MainButton -->
+    <button class="btn" id="fallback-submit" type="submit" data-i18n="save" hidden></button>
+  </form>
+
+  <div class="card">
+    <h2 data-i18n="recent_purchases"></h2>
+    <div id="recent" class="loader" data-i18n="loading"></div>
+  </div>
+
+  <script src="/static/js/i18n.js"></script>
+  <script src="/static/js/app.js"></script>
+  <script>
+    "use strict";
+    App.init();
+    const { api, tg, fmtMoney, fmtQty, fmtDate, esc, toast, showError, errorText } = App;
+    const t = I18N.t;
+    const $ = (id) => document.getElementById(id);
+    const UNITS = ["kg", "g", "l", "ml", "pcs"];
+    const insideTelegram = Boolean(tg && tg.initData);
+
+    let stock = [];
+    let saving = false;
+
+    // ---------- Справочники ----------
+    async function loadStock() {
+      try {
+        stock = await api("/api/stock");
+        $("product").innerHTML = `<option value="">${esc(t("choose_product"))}</option>` +
+          stock.map((p) => `<option value="${p.id}">${esc(p.name)} (${fmtQty(p.quantity)} ${esc(p.unit)})</option>`).join("");
+      } catch (e) { showError(e); }
+    }
+
+    async function loadRecent() {
+      try {
+        const rows = await api("/api/purchase");
+        $("recent").className = "";
+        $("recent").innerHTML = rows.map((p) => `
+          <div class="list-item">
+            <div><div class="title">${esc(p.product_name)}</div><div class="hint">${fmtDate(p.date)} · ${esc(t(p.payment_method))}</div></div>
+            <div class="right">${fmtMoney(p.total_price)}<div class="hint">${fmtQty(p.quantity)} ${esc(p.unit)}</div></div>
+          </div>`).join("") || `<div class="empty">${esc(t("nothing_found"))}</div>`;
+      } catch (e) { $("recent").textContent = errorText(e); }
+    }
+
+    $("product").addEventListener("change", () => {
+      const p = stock.find((x) => String(x.id) === $("product").value);
+      if (p && UNITS.includes(p.unit)) $("unit").value = p.unit;
+      $("product").classList.remove("invalid");
+    });
+
+    // ---------- Сохранение закупки ----------
+    function validateForm() {
+      let ok = true;
+      const mark = (id, bad) => { $(id).classList.toggle("invalid", bad); if (bad) ok = false; };
+      mark("product", !$("product").value);
+      mark("quantity", !(parseFloat($("quantity").value) > 0));
+      mark("total", !(parseFloat($("total").value) >= 0) || $("total").value === "");
+      if (!$("product").value) toast(t("product_required"), "error");
+      else if (!(parseFloat($("quantity").value) > 0)) toast(t("quantity_required"), "error");
+      else if (!ok) toast(t("price_required"), "error");
+      return ok;
+    }
+
+    async function savePurchase() {
+      if (saving) return;               // защита от двойного нажатия
+      if (!validateForm()) return;
+
+      saving = true;
+      const mb = insideTelegram ? tg.MainButton : null;
+      if (mb) { mb.showProgress(false); mb.disable(); }   // БАГ 1: прогресс через MainButton
+      $("fallback-submit").disabled = true;
+      try {
+        // БАГ 3: ждём ответ сервера; успех — только если api() не бросил ошибку
+        const res = await api("/api/purchase", { json: {
+          product_id: Number($("product").value),
+          quantity: parseFloat($("quantity").value),
+          unit: $("unit").value,
+          total_price: parseFloat($("total").value),
+          payment_method: $("payment").value,
+          date: $("date").value || App.today(),
+        } });
+        toast(`${t("purchase_saved")} · ${res.product_name} +${fmtQty(res.quantity)} ${res.unit}`);
+        $("quantity").value = ""; $("total").value = "";
+        await Promise.all([loadStock(), loadRecent()]);
+        $("product").value = String(res.stock.id);
+      } catch (e) {
+        // БАГ 2: сервер вернул 400 product_not_found / unit_mismatch → показываем причину
+        showError(e);
+      } finally {
+        // БАГ 1: кнопка разблокируется ВСЕГДА, даже после ошибки сети
+        saving = false;
+        if (mb) { mb.hideProgress(); mb.enable(); }
+        $("fallback-submit").disabled = false;
+      }
+    }
+
+    $("purchase-form").addEventListener("submit", (ev) => { ev.preventDefault(); savePurchase(); });
+
+    // ---------- ИИ-распознавание чека ----------
+    let aiItems = [];
+
+    $("ai-btn").addEventListener("click", () => $("ai-file").click());
+
+    $("ai-file").addEventListener("change", async () => {
+      const file = $("ai-file").files[0];
+      if (!file) return;
+      const btn = $("ai-btn");
+      btn.disabled = true; btn.textContent = t("ai_processing");
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const res = await api("/api/parse-receipt", { form });
+        aiItems = res.items.map((i) => ({ ...i, state: "pending" }));
+        renderAiItems();
+      } catch (e) {
+        showError(e); // 503 — Gemini недоступен, 429 — лимит, 502 — плохой ответ
+      } finally {
+        btn.disabled = false; btn.textContent = t("ai_scan");
+        $("ai-file").value = ""; // чтобы можно было выбрать тот же файл ещё раз
+      }
+    });
+
+    function productOptions(selectedId) {
+      return `<option value="">${esc(t("not_in_stock"))}</option>` +
+        stock.map((p) => `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+    }
+
+    function renderAiItems() {
+      $("ai-result").hidden = false;
+      if (!aiItems.length) { $("ai-items").innerHTML = `<div class="empty">${esc(t("nothing_found"))}</div>`; return; }
+      $("ai-items").innerHTML = aiItems.map((i, idx) => `
+        <div class="list-item" style="flex-direction:column">
+          <div><span class="title">${esc(i.name)}</span> — ${fmtQty(i.quantity)} ${esc(i.unit)} · ${fmtMoney(i.total_price)}</div>
+          ${i.state === "pending" ? `
+            <select data-ai-product="${idx}">${productOptions(i.product_id)}</select>
+            <div class="row">
+              <button type="button" class="btn-sm primary" data-ai-add="${idx}">${esc(t("add"))}</button>
+              <button type="button" class="btn-sm" data-ai-skip="${idx}">${esc(t("skip"))}</button>
+            </div>` : `<span class="badge ${i.state === "added" ? "ok" : ""}">${esc(t(i.state))}</span>`}
+        </div>`).join("");
+    }
+
+    $("ai-items").addEventListener("click", async (ev) => {
+      const addIdx = ev.target.dataset.aiAdd;
+      const skipIdx = ev.target.dataset.aiSkip;
+      if (skipIdx !== undefined) { aiItems[skipIdx].state = "skipped"; renderAiItems(); return; }
+      if (addIdx === undefined) return;
+
+      const item = aiItems[addIdx];
+      const productId = Number(document.querySelector(`[data-ai-product="${addIdx}"]`).value);
+      if (!productId) return toast(t("err_product_not_found"), "error");
+
+      ev.target.disabled = true;
+      try {
+        const unit = UNITS.includes(item.unit) ? item.unit : null; // неизвестная единица → единица склада
+        await api("/api/purchase", { json: {
+          product_id: productId, quantity: item.quantity, unit,
+          total_price: item.total_price, payment_method: $("payment").value, date: $("date").value || App.today(),
+        } });
+        item.state = "added";
+        toast(t("purchase_saved"));
+        renderAiItems();
+        loadStock(); loadRecent();
+      } catch (e) {
+        showError(e);
+        ev.target.disabled = false;
+      }
+    });
+
+    // ---------- Запуск ----------
+    $("date").value = App.today();
+    if (insideTelegram) {
+      tg.MainButton.setText(t("save"));
+      tg.MainButton.onClick(savePurchase);
+      tg.MainButton.show();
+    } else {
+      $("fallback-submit").hidden = false;
+    }
+    loadStock();
+    loadRecent();
+  </script>
+</body>
+</html>

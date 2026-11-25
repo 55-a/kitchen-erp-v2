@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Kuxnya NVGR — Cook</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="tabs">
+    <button data-tab="batch" data-i18n="tab_batch"></button>
+    <button data-tab="recipes" data-i18n="tab_recipes"></button>
+    <button data-tab="history" data-i18n="tab_history"></button>
+  </div>
+
+  <!-- ============ Новая партия ============ -->
+  <section data-panel="batch" hidden>
+    <div class="card">
+      <label for="recipe" data-i18n="recipe"></label>
+      <select id="recipe"></select>
+      <div class="row">
+        <div>
+          <label for="planned" data-i18n="planned_yield"></label>
+          <input id="planned" type="number" inputmode="decimal" min="0" step="any">
+        </div>
+        <div>
+          <label for="actual" data-i18n="actual_yield"></label>
+          <input id="actual" type="number" inputmode="decimal" min="0" step="any">
+        </div>
+      </div>
+      <label for="batch-date" data-i18n="date"></label>
+      <input id="batch-date" type="date">
+      <!-- Запасная кнопка вне Telegram (в Telegram используется MainButton) -->
+      <button class="btn" id="fallback-submit" type="button" data-i18n="create_batch" hidden></button>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="ingredients"></h2>
+      <div id="ingredients" class="loader" data-i18n="loading"></div>
+      <p class="hint" id="batch-cost"></p>
+    </div>
+  </section>
+
+  <!-- ============ Рецепты ============ -->
+  <section data-panel="recipes" hidden>
+    <div id="recipes-list" class="loader" data-i18n="loading"></div>
+  </section>
+
+  <!-- ============ История ============ -->
+  <section data-panel="history" hidden>
+    <div class="card"><div id="history" class="loader" data-i18n="loading"></div></div>
+  </section>
+
+  <script src="/static/js/i18n.js"></script>
+  <script src="/static/js/app.js"></script>
+  <script>
+    "use strict";
+    App.init();
+    const { api, tg, fmtMoney, fmtQty, fmtDate, esc, toast, showError, errorText } = App;
+    const t = I18N.t;
+    let recipes = [];
+    let busy = false;
+    let currentTab = null;
+
+    const $ = (id) => document.getElementById(id);
+    const selectedRecipe = () => recipes.find((r) => String(r.id) === $("recipe").value);
+
+    async function loadRecipes() {
+      try {
+        recipes = await api("/api/recipes");
+        const prev = $("recipe").value;
+        $("recipe").innerHTML = `<option value="">${esc(t("choose_recipe"))}</option>` +
+          recipes.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
+        if (prev) $("recipe").value = prev;
+        renderIngredients();
+        renderRecipeList();
+      } catch (e) {
+        $("ingredients").textContent = errorText(e);
+        $("recipes-list").textContent = errorText(e);
+      }
+    }
+
+    /** Потребность = количество на базовый выход × (плановый / базовый), в единицах склада */
+    function renderIngredients() {
+      const r = selectedRecipe();
+      const box = $("ingredients");
+      box.className = "";
+      if (!r) { box.innerHTML = `<div class="empty">${esc(t("choose_recipe"))}</div>`; $("batch-cost").textContent = ""; return; }
+      const planned = parseFloat($("planned").value) || 0;
+      const factor = r.base_yield ? planned / r.base_yield : 0;
+      box.innerHTML = `<table><thead><tr><th>${esc(t("product"))}</th><th class="right">${esc(t("need"))}</th><th class="right">${esc(t("in_stock"))}</th></tr></thead><tbody>` +
+        r.ingredients.map((i) => {
+          const need = i.quantity_in_stock_unit != null ? i.quantity_in_stock_unit * factor : null;
+          const short = need != null && need > i.stock_quantity;
+          return `<tr>
+            <td>${esc(i.product)}${short ? ` <span class="badge danger">${esc(t("shortage"))}</span>` : ""}</td>
+            <td class="right">${need != null ? fmtQty(need) : "?"} ${esc(i.stock_unit)}</td>
+            <td class="right ${short ? "danger" : ""}">${fmtQty(i.stock_quantity)} ${esc(i.stock_unit)}</td>
+          </tr>`;
+        }).join("") + "</tbody></table>";
+      $("batch-cost").textContent = planned > 0 ? `${t("cost")}: ${fmtMoney(r.cost_per_base * factor)} · ${t("cost_per_portion")}: ${fmtMoney(r.cost_per_portion)}` : "";
+    }
+
+    function renderRecipeList() {
+      $("recipes-list").className = "";
+      $("recipes-list").innerHTML = recipes.map((r) => `
+        <div class="card">
+          <div class="list-item" style="border:0;padding-top:0">
+            <span class="title">${esc(r.name)}</span>
+            <span class="badge">${esc(t("base_yield"))}: ${fmtQty(r.base_yield)}</span>
+          </div>
+          <div class="hint">${esc(t("cost_per_portion"))}: ${fmtMoney(r.cost_per_portion)}</div>
+          ${r.ingredients.map((i) => `<div class="list-item"><span>${esc(i.product)}</span><span class="muted">${fmtQty(i.quantity)} ${esc(i.unit)}</span></div>`).join("")}
+        </div>`).join("") || `<div class="empty">${esc(t("nothing_found"))}</div>`;
+    }
+
+    async function loadHistory() {
+      try {
+        const rows = await api("/api/batch");
+        $("history").className = "";
+        $("history").innerHTML = rows.map((b) => `
+          <div class="list-item">
+            <div><div class="title">${esc(b.recipe)}</div><div class="hint">${fmtDate(b.date)}</div></div>
+            <div class="right">${fmtQty(b.planned_yield)} → ${b.actual_yield != null ? fmtQty(b.actual_yield) : "—"}<div class="hint">${fmtMoney(b.cost)}</div></div>
+          </div>`).join("") || `<div class="empty">${esc(t("nothing_found"))}</div>`;
+      } catch (e) { $("history").textContent = errorText(e); }
+    }
+
+    // ---------- Отправка партии ----------
+    async function submitBatch() {
+      if (busy) return; // защита от двойного нажатия
+      const r = selectedRecipe();
+      const planned = parseFloat($("planned").value);
+      const actualRaw = $("actual").value;
+      if (!r) return toast(t("choose_recipe"), "error");
+      if (!(planned > 0)) return toast(t("quantity_required"), "error");
+
+      busy = true;
+      const mb = tg && tg.MainButton;
+      if (mb) { mb.showProgress(false); mb.disable(); }
+      $("fallback-submit").disabled = true;
+      try {
+        const res = await api("/api/batch", { json: {
+          recipe_id: r.id, planned_yield: planned,
+          actual_yield: actualRaw === "" ? null : parseFloat(actualRaw),
+          date: $("batch-date").value || App.today(),
+        } });
+        toast(`${t("batch_created")} · ${fmtMoney(res.cost)}`);
+        $("actual").value = "";
+        await loadRecipes(); // остатки изменились
+      } catch (e) {
+        showError(e);
+      } finally {
+        busy = false;
+        if (mb) { mb.hideProgress(); mb.enable(); }
+        $("fallback-submit").disabled = false;
+      }
+    }
+
+    function updateMainButton() {
+      const mb = tg && tg.initData ? tg.MainButton : null;
+      if (!mb) { $("fallback-submit").hidden = currentTab !== "batch"; return; }
+      if (currentTab === "batch") { mb.setText(t("create_batch")); mb.show(); } else { mb.hide(); }
+    }
+
+    $("recipe").addEventListener("change", () => {
+      const r = selectedRecipe();
+      if (r && !$("planned").value) $("planned").value = r.base_yield;
+      renderIngredients();
+    });
+    $("planned").addEventListener("input", renderIngredients);
+    $("batch-date").value = App.today();
+    $("fallback-submit").addEventListener("click", submitBatch);
+    if (tg) tg.MainButton.onClick(submitBatch);
+
+    App.initTabs((tab) => {
+      currentTab = tab;
+      updateMainButton();
+      if (tab === "history") loadHistory();
+    });
+    loadRecipes();
+  </script>
+</body>
+</html>

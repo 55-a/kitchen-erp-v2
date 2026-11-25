@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Kuxnya NVGR — Owner</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="tabs">
+    <button data-tab="stats" data-i18n="btn_stats"></button>
+    <button data-tab="clients" data-i18n="btn_clients"></button>
+  </div>
+
+  <!-- ============ Статистика ============ -->
+  <section data-panel="stats" hidden>
+    <div class="card">
+      <label for="period" data-i18n="period"></label>
+      <select id="period">
+        <option value="all" data-i18n="period_all"></option>
+        <option value="month" data-i18n="period_month"></option>
+        <option value="year" data-i18n="period_year"></option>
+      </select>
+    </div>
+
+    <div id="stats-loader" class="loader" data-i18n="loading"></div>
+    <div id="stats-error" class="card danger" hidden></div>
+
+    <div id="stats-content" hidden>
+      <div class="grid">
+        <div class="stat wide"><div class="label" data-i18n="revenue"></div><div class="value" id="s-revenue"></div></div>
+        <div class="stat"><div class="label" data-i18n="cost"></div><div class="value" id="s-cost"></div></div>
+        <div class="stat"><div class="label" data-i18n="profit"></div><div class="value" id="s-profit"></div></div>
+        <div class="stat"><div class="label" data-i18n="margin"></div><div class="value" id="s-margin"></div></div>
+        <div class="stat"><div class="label" data-i18n="portions"></div><div class="value" id="s-portions"></div></div>
+        <div class="stat"><div class="label" data-i18n="purchases_total"></div><div class="value" id="s-purchases"></div></div>
+        <div class="stat"><div class="label" data-i18n="stock_value"></div><div class="value" id="s-stock"></div></div>
+      </div>
+      <div class="card">
+        <h2 data-i18n="chart_title"></h2>
+        <div class="chart-box"><canvas id="chart"></canvas></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Клиенты ============ -->
+  <section data-panel="clients" hidden>
+    <div class="card">
+      <div id="clients-loader" class="loader" data-i18n="loading"></div>
+      <table id="clients-table" hidden>
+        <thead>
+          <tr><th data-i18n="client"></th><th class="right" data-i18n="charged"></th><th class="right" data-i18n="paid"></th><th class="right" data-i18n="debt"></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="tabs" id="op-tabs">
+        <button type="button" class="active" data-op="payment" data-i18n="record_payment"></button>
+        <button type="button" data-op="delivery" data-i18n="record_delivery"></button>
+      </div>
+      <form id="op-form" novalidate>
+        <label for="op-client" data-i18n="client"></label>
+        <select id="op-client" required></select>
+
+        <div data-op-field="delivery" hidden>
+          <label for="op-dish" data-i18n="dish"></label>
+          <input id="op-dish" maxlength="255">
+          <label for="op-portions" data-i18n="portions_count"></label>
+          <input id="op-portions" type="number" inputmode="numeric" min="1" step="1">
+          <label for="op-cost" data-i18n="cost_label"></label>
+          <input id="op-cost" type="number" inputmode="decimal" min="0" step="any">
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="op-amount" data-i18n="amount"></label>
+            <input id="op-amount" type="number" inputmode="decimal" min="0" step="any" required>
+          </div>
+          <div>
+            <label for="op-date" data-i18n="date"></label>
+            <input id="op-date" type="date" required>
+          </div>
+        </div>
+
+        <div data-op-field="payment">
+          <label for="op-type" data-i18n="payment_type"></label>
+          <select id="op-type">
+            <option value="cash" data-i18n="cash"></option>
+            <option value="card" data-i18n="card"></option>
+            <option value="transfer" data-i18n="transfer"></option>
+          </select>
+        </div>
+
+        <button class="btn" id="op-submit" type="submit" data-i18n="save"></button>
+      </form>
+    </div>
+  </section>
+
+  <script src="/static/js/i18n.js"></script>
+  <script src="/static/js/app.js"></script>
+  <script>
+    "use strict";
+    App.init();
+    const { api, fmtMoney, fmtQty, esc, toast, showError, errorText } = App;
+    const t = I18N.t;
+    let chart = null;
+    let clientsLoaded = false;
+
+    // ---------- Статистика ----------
+    function periodRange(kind) {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      if (kind === "month") return { date_from: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01` };
+      if (kind === "year") return { date_from: `${now.getFullYear()}-01-01` };
+      return {};
+    }
+
+    async function loadStats() {
+      const loader = document.getElementById("stats-loader");
+      const errBox = document.getElementById("stats-error");
+      const content = document.getElementById("stats-content");
+      loader.hidden = false; errBox.hidden = true;
+      try {
+        // api() проверяет response.ok ДО парсинга JSON — ошибки 403/500 не "ломают" страницу
+        const s = await api("/api/stats", { query: periodRange(document.getElementById("period").value) });
+        document.getElementById("s-revenue").textContent = fmtMoney(s.revenue);
+        document.getElementById("s-cost").textContent = fmtMoney(s.cost);
+        const profitEl = document.getElementById("s-profit");
+        profitEl.textContent = fmtMoney(s.profit);
+        profitEl.className = "value " + (s.profit < 0 ? "danger" : "ok");
+        document.getElementById("s-margin").textContent = s.margin + "%";
+        document.getElementById("s-portions").textContent = fmtQty(s.portions);
+        document.getElementById("s-purchases").textContent = fmtMoney(s.purchases_total);
+        document.getElementById("s-stock").textContent = fmtMoney(s.stock_value);
+        drawChart(s.by_month || []);
+        renderClients(s.by_client || []);
+        content.hidden = false;
+      } catch (e) {
+        content.hidden = true;
+        errBox.textContent = errorText(e);
+        errBox.hidden = false;
+      } finally {
+        loader.hidden = true;
+      }
+    }
+
+    function drawChart(months) {
+      if (typeof Chart === "undefined") return; // CDN недоступен — карточки всё равно показаны
+      const style = getComputedStyle(document.documentElement);
+      const accent = style.getPropertyValue("--accent").trim() || "#2a7ae2";
+      const textColor = style.getPropertyValue("--hint").trim() || "#8e8e93";
+      if (chart) chart.destroy();
+      chart = new Chart(document.getElementById("chart"), {
+        data: {
+          labels: months.map((m) => m.month),
+          datasets: [
+            { type: "bar", label: t("revenue"), data: months.map((m) => m.revenue), backgroundColor: accent, borderRadius: 4 },
+            { type: "line", label: t("profit"), data: months.map((m) => m.profit), borderColor: "#2fa86b", backgroundColor: "#2fa86b", tension: 0.3 },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: textColor } },
+            tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmtMoney(c.parsed.y)}` } },
+          },
+          scales: {
+            x: { ticks: { color: textColor }, grid: { display: false } },
+            y: { ticks: { color: textColor, callback: (v) => Number(v).toLocaleString() } },
+          },
+        },
+      });
+    }
+
+    // ---------- Клиенты ----------
+    function renderClients(rows) {
+      const tbody = document.querySelector("#clients-table tbody");
+      tbody.innerHTML = rows.map((c) => `
+        <tr>
+          <td>${esc(c.client)}</td>
+          <td class="right">${fmtMoney(c.charged_total)}</td>
+          <td class="right">${fmtMoney(c.paid_total)}</td>
+          <td class="right ${c.debt > 0 ? "danger" : "ok"}">${fmtMoney(c.debt)}</td>
+        </tr>`).join("") || `<tr><td colspan="4" class="empty">${t("nothing_found")}</td></tr>`;
+      document.getElementById("clients-loader").hidden = true;
+      document.getElementById("clients-table").hidden = false;
+    }
+
+    async function loadClientList() {
+      if (clientsLoaded) return;
+      try {
+        const clients = await api("/api/clients");
+        const sel = document.getElementById("op-client");
+        sel.innerHTML = `<option value="">${esc(t("choose_client"))}</option>` +
+          clients.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}${c.linked ? "" : " · " + esc(t("not_linked"))}</option>`).join("");
+        clientsLoaded = true;
+      } catch (e) { showError(e); }
+    }
+
+    let op = "payment";
+    document.querySelectorAll("#op-tabs [data-op]").forEach((b) => b.addEventListener("click", () => {
+      op = b.dataset.op;
+      document.querySelectorAll("#op-tabs [data-op]").forEach((x) => x.classList.toggle("active", x === b));
+      document.querySelectorAll("[data-op-field]").forEach((f) => { f.hidden = f.dataset.opField !== op; });
+    }));
+
+    document.getElementById("op-date").value = App.today();
+    let opBusy = false;
+    document.getElementById("op-form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      if (opBusy) return;
+      const client = document.getElementById("op-client").value;
+      const amount = parseFloat(document.getElementById("op-amount").value);
+      const date = document.getElementById("op-date").value;
+      if (!client) return toast(t("choose_client"), "error");
+      if (!(amount >= 0) || (op === "payment" && !(amount > 0))) return toast(t("price_required"), "error");
+
+      let path, payload;
+      if (op === "payment") {
+        path = "/api/client/payment";
+        payload = { client, amount, date, payment_type: document.getElementById("op-type").value };
+      } else {
+        const portions = parseInt(document.getElementById("op-portions").value, 10);
+        const dish = document.getElementById("op-dish").value.trim();
+        if (!dish || !(portions > 0)) return toast(t("err_validation_error"), "error");
+        path = "/api/client/delivery";
+        payload = { client, amount, date, dish_name: dish, portions, cost: parseFloat(document.getElementById("op-cost").value) || 0 };
+      }
+
+      const btn = document.getElementById("op-submit");
+      opBusy = true; btn.disabled = true; btn.textContent = t("saving");
+      try {
+        await api(path, { json: payload }); // успех показываем только после ответа сервера
+        toast(t("saved"));
+        document.getElementById("op-amount").value = "";
+        await loadStats();
+      } catch (e) {
+        showError(e);
+      } finally {
+        opBusy = false; btn.disabled = false; btn.textContent = t("save");
+      }
+    });
+
+    document.getElementById("period").addEventListener("change", loadStats);
+    App.initTabs((tab) => { if (tab === "clients") loadClientList(); });
+    loadStats();
+  </script>
+</body>
+</html>

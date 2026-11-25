@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Kuxnya NVGR — Client</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <h1 id="client-name">Kuxnya NVGR</h1>
+
+  <div class="tabs">
+    <button data-tab="deliveries" data-i18n="tab_deliveries"></button>
+    <button data-tab="invoice" data-i18n="tab_invoice"></button>
+    <button data-tab="act" data-i18n="tab_act"></button>
+  </div>
+
+  <!-- ============ Поставки ============ -->
+  <section data-panel="deliveries" hidden>
+    <div class="grid">
+      <div class="stat"><div class="label" data-i18n="portions"></div><div class="value" id="d-portions">—</div></div>
+      <div class="stat"><div class="label" data-i18n="total"></div><div class="value" id="d-total">—</div></div>
+    </div>
+    <div class="card"><div id="deliveries" class="loader" data-i18n="loading"></div></div>
+  </section>
+
+  <!-- ============ Счёт ============ -->
+  <section data-panel="invoice" hidden>
+    <div class="grid">
+      <div class="stat"><div class="label" data-i18n="charged"></div><div class="value" id="i-charged">—</div></div>
+      <div class="stat"><div class="label" data-i18n="paid"></div><div class="value" id="i-paid">—</div></div>
+      <div class="stat wide"><div class="label" data-i18n="debt"></div><div class="value" id="i-debt">—</div></div>
+    </div>
+    <div class="card">
+      <h2 data-i18n="paid"></h2>
+      <div id="payments" class="loader" data-i18n="loading"></div>
+    </div>
+  </section>
+
+  <!-- ============ Акт сверки ============ -->
+  <section data-panel="act" hidden>
+    <div class="card">
+      <p class="hint" data-i18n="act_hint"></p>
+      <div class="row">
+        <div><label for="act-from" data-i18n="date_from"></label><input id="act-from" type="date"></div>
+        <div><label for="act-to" data-i18n="date_to"></label><input id="act-to" type="date"></div>
+      </div>
+      <button class="btn" id="download-btn" type="button" data-i18n="download_pdf"></button>
+      <button class="btn secondary" id="send-btn" type="button" data-i18n="send_to_chat"></button>
+    </div>
+  </section>
+
+  <script src="/static/js/i18n.js"></script>
+  <script src="/static/js/app.js"></script>
+  <script>
+    "use strict";
+    App.init();
+    const { api, tg, fmtMoney, fmtQty, fmtDate, esc, toast, showError, errorText } = App;
+    const t = I18N.t;
+    const $ = (id) => document.getElementById(id);
+    const loaded = {};
+
+    // Владелец может открыть кабинет конкретного клиента: /app/client?client=Название
+    const ownerClient = new URLSearchParams(location.search).get("client");
+    const scope = ownerClient ? { client: ownerClient } : {};
+
+    async function loadDeliveries() {
+      try {
+        const res = await api("/api/client/deliveries", { query: scope });
+        $("client-name").textContent = res.client;
+        $("d-portions").textContent = fmtQty(res.total_portions);
+        $("d-total").textContent = fmtMoney(res.total_amount);
+        $("deliveries").className = "";
+        $("deliveries").innerHTML = res.items.map((d) => `
+          <div class="list-item">
+            <div><div class="title">${esc(d.dish_name)}</div><div class="hint">${fmtDate(d.date)} · ${fmtQty(d.portions)} ${esc(t("portions_count").toLowerCase())}</div></div>
+            <div class="right">${fmtMoney(d.amount)}</div>
+          </div>`).join("") || `<div class="empty">${esc(t("no_deliveries"))}</div>`;
+      } catch (e) {
+        $("deliveries").className = "danger";
+        $("deliveries").textContent = errorText(e);
+      }
+    }
+
+    async function loadInvoice() {
+      try {
+        const inv = await api("/api/client/invoice", { query: scope });
+        $("client-name").textContent = inv.client;
+        $("i-charged").textContent = fmtMoney(inv.charged);
+        $("i-paid").textContent = fmtMoney(inv.paid);
+        $("i-debt").textContent = fmtMoney(inv.debt);
+        $("i-debt").className = "value " + (inv.debt > 0 ? "danger" : "ok");
+        $("payments").className = "";
+        $("payments").innerHTML = inv.payments.map((p) => `
+          <div class="list-item"><span>${fmtDate(p.date)} · ${esc(t(p.payment_type))}</span><span>${fmtMoney(p.amount)}</span></div>`).join("")
+          || `<div class="empty">${esc(t("nothing_found"))}</div>`;
+      } catch (e) {
+        $("payments").className = "danger";
+        $("payments").textContent = errorText(e);
+      }
+    }
+
+    function actPayload() {
+      return { ...scope, date_from: $("act-from").value || null, date_to: $("act-to").value || null };
+    }
+
+    /** Блокирует кнопку на время запроса и всегда разблокирует в finally */
+    async function withButton(btn, fn) {
+      if (btn.disabled) return;
+      const label = btn.textContent;
+      btn.disabled = true; btn.textContent = t("loading");
+      try { await fn(); } catch (e) { showError(e); } finally { btn.disabled = false; btn.textContent = label; }
+    }
+
+    // Скачивание PDF: WebView Telegram не передаёт заголовки при скачивании,
+    // поэтому получаем одноразовую ссылку (5 минут) и открываем её средствами Telegram.
+    $("download-btn").addEventListener("click", () => withButton($("download-btn"), async () => {
+      const { url, file_name } = await api("/api/client/act-link", { json: actPayload() });
+      if (tg && typeof tg.downloadFile === "function" && tg.isVersionAtLeast && tg.isVersionAtLeast("8.0")) {
+        tg.downloadFile({ url, file_name });
+      } else if (tg && tg.initData) {
+        tg.openLink(url);
+      } else {
+        window.open(url, "_blank");
+      }
+    }));
+
+    // Самый надёжный вариант на телефоне — бот пришлёт PDF в чат
+    $("send-btn").addEventListener("click", () => withButton($("send-btn"), async () => {
+      await api("/api/client/act-send", { json: actPayload() });
+      toast(t("sent_to_chat"));
+    }));
+
+    App.initTabs((tab) => {
+      if (loaded[tab]) return;
+      loaded[tab] = true;
+      if (tab === "deliveries") loadDeliveries();
+      if (tab === "invoice") loadInvoice();
+    });
+  </script>
+</body>
+</html>

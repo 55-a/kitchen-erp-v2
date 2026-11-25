@@ -1,0 +1,21 @@
+# Бот
+aiogram==3.15.0
+
+# API
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+
+# База данных
+SQLAlchemy==2.0.36
+asyncpg==0.30.0
+aiosqlite==0.20.0
+
+# Внешние сервисы, PDF, Excel
+httpx==0.28.1
+fpdf2==2.8.2
+openpyxl==3.1.5
+
+# Тесты
+pytest==8.3.4
+pytest-asyncio==0.24.0

@@ -1,0 +1,120 @@
+# Kuxnya NVGR — ERP кухни (Telegram-бот + Mini App + API)
+
+Telegram-бот на aiogram 3, REST API на FastAPI, PostgreSQL, распознавание чеков через Google Gemini,
+PDF-акты сверки на 4 языках (RU, EN, UZ, ZH).
+
+## Роли
+
+| Роль | Кнопки в боте | Что делает |
+|---|---|---|
+| 👑 Владелец | 📊 Статистика, 🤝 Клиенты | выручка, себестоимость, прибыль, маржа, графики по месяцам, долги клиентов, ввод оплат и поставок; `/stats`, `/link_client` |
+| 👨‍🍳 Повар | 🍲 Новая партия, 📖 Рецепты | партия списывает продукты со склада (с пересчётом г↔кг); `/stock` |
+| 🛒 Закупщик | 🛒 Новая закупка | закупка увеличивает остаток; **фото чека прямо в чат** → Gemini → кнопки ✅ Добавить / ✕ Пропустить |
+| 🤝 Клиент | 📦 Поставки, 🧾 Счёт, 📄 Акт | свои поставки, начислено/оплачено/долг, PDF акт сверки; `/act` |
+
+Роль владельца выдаётся **только** Telegram ID из `OWNER_IDS`. Если задан `STAFF_IDS`, роли повара и
+закупщика доступны только этим ID. Клиента к аккаунту привязывает владелец:
+
+```
+/link_client 123456789 FOYDALI FOOD GROUP
+```
+
+## Структура
+
+```
+api/            FastAPI: main.py, auth.py (initData), models.py, database.py, services.py (бизнес-логика),
+                gemini.py, pdf_generator.py, units.py, config.py, routers/*
+bot/            aiogram 3: main.py, handlers/*, keyboards.py, translations.py, utils.py
+templates/      owner.html, cook.html, purchaser.html, client.html (Mini App)
+static/         css/style.css, js/i18n.js, js/app.js
+migrations/     migrate_excel.py — импорт Учёт_кухни.xlsx
+tests/          test_api.py, test_bot.py
+```
+
+## API
+
+Все `/api/*` (кроме `/api/health`) требуют заголовок `X-Telegram-Init-Data: <Telegram.WebApp.initData>`
+(или `Authorization: tma <initData>`). Подпись проверяется HMAC-SHA256 с токеном бота; ошибка → **403**.
+
+| Метод | Путь | Роль | Описание |
+|---|---|---|---|
+| GET | `/api/stats?date_from&date_to` | владелец | выручка, себестоимость, прибыль, маржа, по месяцам, по клиентам |
+| GET | `/api/stock` | повар, закупщик | остатки |
+| GET | `/api/recipes` | повар | рецепты с ингредиентами и остатками |
+| POST | `/api/batch` | повар | партия; не хватает продуктов → 400 `insufficient_stock` |
+| POST | `/api/purchase` | закупщик | закупка; товара нет на складе → 400 `product_not_found` |
+| POST | `/api/parse-receipt` | закупщик | фото чека (multipart `file`); Gemini недоступен → 503, лимит → 429 |
+| GET | `/api/client/deliveries?tg_id=` | клиент / владелец | поставки |
+| GET | `/api/client/invoice?tg_id=` | клиент / владелец | начислено, оплачено, долг |
+| GET | `/api/client/act-pdf?tg_id=` | клиент / владелец | PDF акт сверки на языке клиента |
+| POST | `/api/client/act-link`, `/api/client/act-send` | клиент / владелец | одноразовая ссылка на PDF / отправка PDF ботом в чат |
+| GET/POST | `/api/clients`, `/api/client/payment`, `/api/client/delivery` | владелец | список клиентов, ввод оплат и поставок |
+
+Клиент видит **только свои** данные: если `tg_id` не совпадает с подписанным initData — 403.
+
+## Исправленные баги из обзора
+
+- **purchaser.html**: прогресс через `tg.MainButton.showProgress()`, кнопка блокируется на время запроса
+  и разблокируется в `finally`; защита от двойного нажатия.
+- **purchaser.html / API**: товар проверяется на сервере — нет на складе → 400, форма показывает причину.
+- **purchaser.html**: успех показывается только после ответа сервера (`await`).
+- **owner.html**: `response.ok` проверяется до парсинга JSON (общая функция `App.api` в `static/js/app.js`).
+- **Все HTML**: только относительные пути `/api/...`.
+- Дополнительно: пересчёт единиц (рецепт в граммах, склад в кг), атомарное списание с блокировкой строк
+  (`SELECT … FOR UPDATE`), средневзвешенная цена закупки, черновики чеков в БД (не теряются при перезапуске),
+  повторное нажатие «Добавить» в боте не проводит закупку дважды.
+
+## Деплой на Railway
+
+1. Создайте проект, добавьте сервис **PostgreSQL**.
+2. Добавьте сервис из этого репозитория (соберётся по `Dockerfile`).
+3. Переменные сервиса: `BOT_TOKEN`, `GEMINI_API_KEY`, `DATABASE_URL` (ссылка на Postgres: `${{Postgres.DATABASE_URL}}`),
+   `WEBAPP_URL` (публичный домен сервиса, `https://…up.railway.app`), `OWNER_IDS`.
+4. Таблицы создаются автоматически при старте. Бот запускается в том же процессе (`RUN_BOT_IN_API=true`).
+   Держите **одну реплику**: два процесса с одним токеном вызовут ошибку `Conflict` в Telegram.
+5. В @BotFather можно задать Menu Button на `https://<домен>/app/client` (необязательно — бот сам даёт кнопки).
+
+## Локальный запуск
+
+```bash
+cp .env.example .env          # заполнить значения
+docker compose up --build     # приложение на http://localhost:8000
+```
+
+Mini App в Telegram открывается только по HTTPS — для локальной проверки используйте туннель
+(например, `cloudflared tunnel --url http://localhost:8000`) и укажите его адрес в `WEBAPP_URL`.
+
+Без Docker:
+
+```bash
+python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn api.main:app --reload
+```
+
+## Импорт из Excel
+
+```bash
+python -m migrations.migrate_excel "Учёт_кухни.xlsx" --dry-run   # проверить файл и контрольные суммы
+python -m migrations.migrate_excel "Учёт_кухни.xlsx"             # импорт
+python -m migrations.migrate_excel "Учёт_кухни.xlsx" --reset     # очистить и импортировать заново
+```
+
+На Railway: `railway run python -m migrations.migrate_excel "Учёт_кухни.xlsx"`.
+
+Скрипт ищет колонки по заголовкам (с синонимами), создаёт клиентов FOYDALI FOOD GROUP и NO NAMELA
+и сверяет итоги с эталоном (527 порций, ~15,8 млн сум). При расхождении выводит предупреждение и код выхода 2.
+
+## Тесты
+
+```bash
+pytest
+```
+
+Тесты работают на SQLite в памяти и не обращаются к Telegram и Gemini.
+
+## Шрифты PDF
+
+В Docker-образ ставятся `fonts-dejavu-core` и `fonts-noto-cjk`. Для запуска без Docker положите
+`DejaVuSans.ttf`, `DejaVuSans-Bold.ttf` и `NotoSansSC-Regular.otf` (или `.ttf`) в папку `fonts/`
+или укажите каталог в `FONT_DIR`.
