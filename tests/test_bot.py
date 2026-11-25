@@ -71,6 +71,20 @@ async def test_owner_role_allowed_for_owner_ids(db):
     cb = fake_callback(OWNER_ID)
     await cb_choose_role(cb, RoleCB(role="owner"))
     assert (await get_user(db, OWNER_ID)).role == "owner"
+
+
+async def test_owner_can_switch_to_other_roles_and_back(db):
+    from api.auth import resolve_role
+    from api.config import get_settings
+
+    settings = get_settings()
+    assert resolve_role(OWNER_ID, None, settings) == "owner"
+    for role in ("cook", "purchaser", "client", "owner"):
+        cb = fake_callback(OWNER_ID)
+        await cb_choose_role(cb, RoleCB(role=role))
+        stored = (await get_user(db, OWNER_ID)).role
+        assert stored == role
+        assert resolve_role(OWNER_ID, stored, settings) == role
     markup = cb.message.edit_text.call_args.kwargs["reply_markup"]
     assert t("ru", "btn_stats") in keyboard_texts(markup)
 

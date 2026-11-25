@@ -56,6 +56,9 @@ async def post_purchase(
         created_by=user.telegram_id,
     )
     await session.commit()
+    # updated_at выставляет сама БД (onupdate=now()), после commit поле «протухло» —
+    # перечитываем товар асинхронно, иначе обращение к нему падает с MissingGreenlet (500)
+    await session.refresh(product)
     return {
         "id": purchase.id,
         "product_name": purchase.product_name,

@@ -134,10 +134,12 @@ def resolve_role(telegram_id: int, stored_role: str | None, settings: Settings) 
     """
     Итоговая роль с учётом белых списков:
     - владелец определяется ТОЛЬКО по OWNER_IDS (нельзя "выбрать" себе роль владельца);
-    - повар/закупщик — если STAFF_IDS задан, только из него.
+    - повар/закупщик — если STAFF_IDS задан, только из него;
+    - владелец может переключиться на любую роль (проверить работу повара, закупщика,
+      клиента) и вернуться обратно через «Сменить роль». Пока роль не выбрана — он владелец.
     """
     if telegram_id in settings.owner_ids:
-        return "owner"
+        return stored_role if stored_role in {"owner", "cook", "purchaser", "client"} else "owner"
     if stored_role == "owner":
         return None
     if stored_role in {"cook", "purchaser"} and settings.staff_ids and telegram_id not in settings.staff_ids:
