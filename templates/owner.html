@@ -143,6 +143,11 @@
         content.hidden = true;
         errBox.textContent = errorText(e);
         errBox.hidden = false;
+        // Вкладка «Клиенты» берёт данные из того же ответа — не оставляем её на «Загрузка…»
+        const clientsLoader = document.getElementById("clients-loader");
+        clientsLoader.className = "danger";
+        clientsLoader.textContent = errorText(e);
+        document.getElementById("clients-table").hidden = true;
       } finally {
         loader.hidden = true;
       }

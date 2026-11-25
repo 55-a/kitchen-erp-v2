@@ -83,6 +83,8 @@
       return text;
     }
     if (I18N.has("err_" + err.status)) return t("err_" + err.status);
+    // Любая другая 5xx — «Сервер недоступен», а не голый код ошибки
+    if (err.status >= 500) return t("err_500");
     return typeof d === "string" ? d : t("error") + " " + err.status;
   }
 
