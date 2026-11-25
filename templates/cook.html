@@ -2,184 +2,224 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
   <title>Kuxnya NVGR — Cook</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-  <div class="tabs">
-    <button data-tab="batch" data-i18n="tab_batch"></button>
-    <button data-tab="recipes" data-i18n="tab_recipes"></button>
-    <button data-tab="history" data-i18n="tab_history"></button>
-  </div>
-
-  <!-- ============ Новая партия ============ -->
-  <section data-panel="batch" hidden>
-    <div class="card">
-      <label for="recipe" data-i18n="recipe"></label>
-      <select id="recipe"></select>
-      <div class="row">
-        <div>
-          <label for="planned" data-i18n="planned_yield"></label>
-          <input id="planned" type="number" inputmode="decimal" min="0" step="any">
-        </div>
-        <div>
-          <label for="actual" data-i18n="actual_yield"></label>
-          <input id="actual" type="number" inputmode="decimal" min="0" step="any">
-        </div>
+  <!--
+    Экран повара: рецепты карточками → модальное окно с ингредиентами →
+    «Создать партию» с подтверждением → POST /api/batch.
+    Сервер списывает продукты атомарно; если чего-то не хватает — 400 insufficient_stock
+    со списком нехватки, который показывается пользователю.
+  -->
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <div class="hello">👨‍🍳 <span data-i18n="kitchen_title"></span></div>
+        <div class="subtitle" data-i18n="cook_subtitle"></div>
       </div>
-      <label for="batch-date" data-i18n="date"></label>
-      <input id="batch-date" type="date">
-      <!-- Запасная кнопка вне Telegram (в Telegram используется MainButton) -->
-      <button class="btn" id="fallback-submit" type="button" data-i18n="create_batch" hidden></button>
+      <div class="balance">
+        <div class="label" data-i18n="ready_to_cook"></div>
+        <div class="value num" id="ready-count">—</div>
+      </div>
+    </header>
+
+    <div class="search">
+      <input id="search" type="search" autocomplete="off" data-i18n-placeholder="search_recipe">
     </div>
 
-    <div class="card">
-      <h2 data-i18n="ingredients"></h2>
-      <div id="ingredients" class="loader" data-i18n="loading"></div>
-      <p class="hint" id="batch-cost"></p>
-    </div>
-  </section>
+    <!-- Рецепты -->
+    <section class="section" id="recipes-section">
+      <div class="section-title"><span data-i18n="tab_recipes"></span><span class="badge info" id="recipes-count">—</span></div>
+      <div class="recipe-grid" id="recipes">
+        <div class="skeleton block"></div><div class="skeleton block"></div>
+        <div class="skeleton block"></div><div class="skeleton block"></div>
+      </div>
+    </section>
 
-  <!-- ============ Рецепты ============ -->
-  <section data-panel="recipes" hidden>
-    <div id="recipes-list" class="loader" data-i18n="loading"></div>
-  </section>
-
-  <!-- ============ История ============ -->
-  <section data-panel="history" hidden>
-    <div class="card"><div id="history" class="loader" data-i18n="loading"></div></div>
-  </section>
+    <!-- История партий -->
+    <section class="card" id="history-section">
+      <div class="card-head"><h2 data-i18n="recent_batches"></h2></div>
+      <div id="history" class="list"></div>
+    </section>
+  </main>
 
   <script src="/static/js/i18n.js"></script>
   <script src="/static/js/app.js"></script>
   <script>
     "use strict";
     App.init();
-    const { api, tg, fmtMoney, fmtQty, fmtDate, esc, toast, showError, errorText } = App;
+    const { api, fmtMoney, fmtQty, fmtDate, esc, toast, showError, errorText, modal, confirm } = App;
     const t = I18N.t;
-    let recipes = [];
-    let busy = false;
-    let currentTab = null;
-
     const $ = (id) => document.getElementById(id);
-    const selectedRecipe = () => recipes.find((r) => String(r.id) === $("recipe").value);
+    let recipes = [];
 
+    // ---------- Иконка блюда по названию ----------
+    const ICONS = [
+      [/плов|ош\b|ош\s|osh/i, "🍚"], [/лагм|лапш|мампар|спагет|макарон/i, "🍜"], [/суп|борщ|шовл|мастав|мош\s?хурд|гарох|горох/i, "🍲"],
+      [/манты|чучвар|чугвар|пельм|долма|голуб|галибси/i, "🥟"], [/самс|пирож|булоч/i, "🥐"], [/котлет|бифштекс|бештекис|люля|тефтел/i, "🍖"],
+      [/кур|товуқ|товук/i, "🍗"], [/димлам|жарко|мохор|мочкичир/i, "🥘"], [/салат/i, "🥗"],
+    ];
+    const iconFor = (name) => (ICONS.find(([re]) => re.test(name)) || [null, "🍽️"])[1];
+
+    /** Сколько порций можно приготовить из текущих остатков (минимум по ингредиентам) */
+    function maxPortions(r) {
+      let max = Infinity;
+      for (const i of r.ingredients) {
+        if (i.quantity_in_stock_unit == null || i.quantity_in_stock_unit <= 0) continue;
+        const perPortion = i.quantity_in_stock_unit / (r.base_yield || 1);
+        max = Math.min(max, Math.floor(i.stock_quantity / perPortion));
+      }
+      return Number.isFinite(max) ? Math.max(0, max) : 0;
+    }
+
+    // ---------- Загрузка и отрисовка рецептов ----------
     async function loadRecipes() {
       try {
         recipes = await api("/api/recipes");
-        const prev = $("recipe").value;
-        $("recipe").innerHTML = `<option value="">${esc(t("choose_recipe"))}</option>` +
-          recipes.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
-        if (prev) $("recipe").value = prev;
-        renderIngredients();
-        renderRecipeList();
+        renderRecipes();
       } catch (e) {
-        $("ingredients").textContent = errorText(e);
-        $("recipes-list").textContent = errorText(e);
+        $("recipes").innerHTML = `<div class="error-box" style="grid-column:1/-1">${esc(errorText(e))}</div>`;
       }
     }
 
-    /** Потребность = количество на базовый выход × (плановый / базовый), в единицах склада */
-    function renderIngredients() {
-      const r = selectedRecipe();
-      const box = $("ingredients");
-      box.className = "";
-      if (!r) { box.innerHTML = `<div class="empty">${esc(t("choose_recipe"))}</div>`; $("batch-cost").textContent = ""; return; }
-      const planned = parseFloat($("planned").value) || 0;
+    function renderRecipes() {
+      const q = $("search").value.trim().toLowerCase();
+      const list = recipes.filter((r) => !q || r.name.toLowerCase().includes(q));
+      $("recipes-count").textContent = list.length;
+      $("ready-count").textContent = recipes.filter((r) => maxPortions(r) > 0).length + " / " + recipes.length;
+      if (!list.length) { $("recipes").innerHTML = `<div style="grid-column:1/-1">${App.emptyHtml("🔍", "nothing_found")}</div>`; return; }
+      $("recipes").innerHTML = list.map((r, idx) => {
+        const can = maxPortions(r);
+        return `
+          <button type="button" class="recipe-card" data-id="${r.id}" style="animation-delay:${Math.min(idx, 12) * 0.03}s">
+            <div class="emoji">${iconFor(r.name)}</div>
+            <div class="name">${esc(r.name)}</div>
+            <div class="meta">${fmtMoney(r.cost_per_portion)} / ${esc(t("portion_one"))}</div>
+            <span class="badge ${can > 0 ? "ok" : "danger"}">${can > 0 ? "✅ " + esc(t("can_cook", { n: fmtQty(can) })) : "❌ " + esc(t("no_stock"))}</span>
+          </button>`;
+      }).join("");
+    }
+
+    $("search").addEventListener("input", renderRecipes);
+    $("recipes").addEventListener("click", (ev) => {
+      const card = ev.target.closest(".recipe-card");
+      if (card) openRecipe(recipes.find((r) => String(r.id) === card.dataset.id));
+    });
+
+    // ---------- Модальное окно рецепта ----------
+    function ingredientRows(r, planned) {
       const factor = r.base_yield ? planned / r.base_yield : 0;
-      box.innerHTML = `<table><thead><tr><th>${esc(t("product"))}</th><th class="right">${esc(t("need"))}</th><th class="right">${esc(t("in_stock"))}</th></tr></thead><tbody>` +
-        r.ingredients.map((i) => {
-          const need = i.quantity_in_stock_unit != null ? i.quantity_in_stock_unit * factor : null;
-          const short = need != null && need > i.stock_quantity;
-          return `<tr>
-            <td>${esc(i.product)}${short ? ` <span class="badge danger">${esc(t("shortage"))}</span>` : ""}</td>
-            <td class="right">${need != null ? fmtQty(need) : "?"} ${esc(i.stock_unit)}</td>
-            <td class="right ${short ? "danger" : ""}">${fmtQty(i.stock_quantity)} ${esc(i.stock_unit)}</td>
-          </tr>`;
-        }).join("") + "</tbody></table>";
-      $("batch-cost").textContent = planned > 0 ? `${t("cost")}: ${fmtMoney(r.cost_per_base * factor)} · ${t("cost_per_portion")}: ${fmtMoney(r.cost_per_portion)}` : "";
+      let shortages = 0;
+      const rows = r.ingredients.map((i) => {
+        const need = i.quantity_in_stock_unit != null ? i.quantity_in_stock_unit * factor : null;
+        const ok = need == null ? null : need <= i.stock_quantity + 1e-9;
+        if (ok === false) shortages += 1;
+        return `<tr>
+          <td>${esc(i.product)}</td>
+          <td class="right num">${need != null ? fmtQty(need) : "?"} <span class="dim">${esc(i.stock_unit)}</span></td>
+          <td class="right num ${ok === false ? "danger" : ""}">${fmtQty(i.stock_quantity)}</td>
+          <td class="right">${ok == null ? "⚠️" : ok ? "✅" : "❌"}</td>
+        </tr>`;
+      }).join("");
+      return { rows, shortages, cost: r.cost_per_base * factor };
     }
 
-    function renderRecipeList() {
-      $("recipes-list").className = "";
-      $("recipes-list").innerHTML = recipes.map((r) => `
-        <div class="card">
-          <div class="list-item" style="border:0;padding-top:0">
-            <span class="title">${esc(r.name)}</span>
-            <span class="badge">${esc(t("base_yield"))}: ${fmtQty(r.base_yield)}</span>
+    function openRecipe(r) {
+      if (!r) return;
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = `
+        <div class="list-item" style="margin:0;padding:0;min-height:0">
+          <div class="lead" style="font-size:26px;width:52px;height:52px">${iconFor(r.name)}</div>
+          <div class="grow">
+            <div class="small muted">${esc(t("base_yield"))}: ${fmtQty(r.base_yield)} ${esc(t("portions_short"))}</div>
+            <div class="small muted">${esc(t("cost_per_portion"))}: <b>${fmtMoney(r.cost_per_portion)}</b></div>
           </div>
-          <div class="hint">${esc(t("cost_per_portion"))}: ${fmtMoney(r.cost_per_portion)}</div>
-          ${r.ingredients.map((i) => `<div class="list-item"><span>${esc(i.product)}</span><span class="muted">${fmtQty(i.quantity)} ${esc(i.unit)}</span></div>`).join("")}
-        </div>`).join("") || `<div class="empty">${esc(t("nothing_found"))}</div>`;
+        </div>
+        <div class="row">
+          <div class="field"><label>${esc(t("batch_portions"))}</label>
+            <input name="planned" type="number" inputmode="numeric" min="1" step="1" value="${Math.max(1, Math.min(maxPortions(r) || 20, 20))}"></div>
+          <div class="field"><label>${esc(t("date"))}</label><input name="date" type="date" value="${App.today()}"></div>
+        </div>
+        <div class="field"><label>${esc(t("actual_yield"))}</label>
+          <input name="actual" type="number" inputmode="numeric" min="0" step="1" data-i18n-placeholder="optional"></div>
+        <div>
+          <div class="card-head" style="margin:4px 0 6px"><h3>${esc(t("ingredients"))}</h3><span class="badge" data-role="status"></span></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>${esc(t("product"))}</th><th class="right">${esc(t("need"))}</th><th class="right">${esc(t("in_stock"))}</th><th class="right"></th></tr></thead>
+            <tbody data-role="rows"></tbody>
+          </table></div>
+        </div>
+        <div class="total-big"><span class="label">${esc(t("batch_cost"))}</span><span class="value" data-role="cost">—</span></div>`;
+
+      const planned = body.querySelector('[name="planned"]');
+      const statusEl = body.querySelector('[data-role="status"]');
+      function refresh() {
+        const n = parseFloat(planned.value) || 0;
+        const { rows, shortages, cost } = ingredientRows(r, n);
+        body.querySelector('[data-role="rows"]').innerHTML = rows;
+        body.querySelector('[data-role="cost"]').textContent = fmtMoney(cost);
+        statusEl.className = "badge " + (shortages ? "danger" : "ok");
+        statusEl.textContent = shortages ? "❌ " + t("shortages_count", { n: shortages }) : "✅ " + t("status_ok");
+      }
+      planned.addEventListener("input", refresh);
+      refresh();
+
+      modal({
+        title: r.name,
+        body,
+        actions: [
+          { label: t("cancel"), kind: "secondary" },
+          { label: "🍲 " + t("create_batch"), kind: "success", onClick: async () => {
+            const n = parseFloat(planned.value);
+            if (!(n > 0)) { planned.classList.add("invalid"); toast(t("quantity_required"), "error"); return false; }
+            const actualRaw = body.querySelector('[name="actual"]').value;
+            const ok = await confirm(t("confirm_batch", { recipe: esc(r.name), portions: fmtQty(n) }), { icon: "🍲", okLabel: t("create_batch"), kind: "success" });
+            if (!ok) return false;
+            try {
+              // Ждём ответ сервера; при нехватке — 400 со списком продуктов (показывает App.errorText)
+              const res = await api("/api/batch", { json: {
+                recipe_id: r.id, planned_yield: n,
+                actual_yield: actualRaw === "" ? null : parseFloat(actualRaw),
+                date: body.querySelector('[name="date"]').value || App.today(),
+              } });
+              toast(`${t("batch_created")} · ${fmtMoney(res.cost)}`);
+              loadRecipes(); loadHistory();
+            } catch (e) {
+              showError(e);
+              return false; // окно остаётся открытым, чтобы поправить количество
+            }
+          } },
+        ],
+      });
     }
 
+    // ---------- История партий ----------
     async function loadHistory() {
+      $("history").innerHTML = App.skeletonHtml(3);
       try {
         const rows = await api("/api/batch");
-        $("history").className = "";
         $("history").innerHTML = rows.map((b) => `
           <div class="list-item">
-            <div><div class="title">${esc(b.recipe)}</div><div class="hint">${fmtDate(b.date)}</div></div>
-            <div class="right">${fmtQty(b.planned_yield)} → ${b.actual_yield != null ? fmtQty(b.actual_yield) : "—"}<div class="hint">${fmtMoney(b.cost)}</div></div>
-          </div>`).join("") || `<div class="empty">${esc(t("nothing_found"))}</div>`;
-      } catch (e) { $("history").textContent = errorText(e); }
-    }
-
-    // ---------- Отправка партии ----------
-    async function submitBatch() {
-      if (busy) return; // защита от двойного нажатия
-      const r = selectedRecipe();
-      const planned = parseFloat($("planned").value);
-      const actualRaw = $("actual").value;
-      if (!r) return toast(t("choose_recipe"), "error");
-      if (!(planned > 0)) return toast(t("quantity_required"), "error");
-
-      busy = true;
-      const mb = tg && tg.MainButton;
-      if (mb) { mb.showProgress(false); mb.disable(); }
-      $("fallback-submit").disabled = true;
-      try {
-        const res = await api("/api/batch", { json: {
-          recipe_id: r.id, planned_yield: planned,
-          actual_yield: actualRaw === "" ? null : parseFloat(actualRaw),
-          date: $("batch-date").value || App.today(),
-        } });
-        toast(`${t("batch_created")} · ${fmtMoney(res.cost)}`);
-        $("actual").value = "";
-        await loadRecipes(); // остатки изменились
+            <div class="lead">${iconFor(b.recipe || "")}</div>
+            <div class="grow"><div class="title">${esc(b.recipe || "—")}</div>
+              <div class="hint">${fmtDate(b.date)} · ${fmtQty(b.planned_yield)}${b.actual_yield != null ? " → " + fmtQty(b.actual_yield) : ""} ${esc(t("portions_short"))}</div></div>
+            <div class="amount">${fmtMoney(b.cost)}</div>
+          </div>`).join("") || App.emptyHtml("🍳", "no_batches");
       } catch (e) {
-        showError(e);
-      } finally {
-        busy = false;
-        if (mb) { mb.hideProgress(); mb.enable(); }
-        $("fallback-submit").disabled = false;
+        $("history").innerHTML = `<div class="error-box">${esc(errorText(e))}</div>`;
       }
     }
 
-    function updateMainButton() {
-      const mb = tg && tg.initData ? tg.MainButton : null;
-      if (!mb) { $("fallback-submit").hidden = currentTab !== "batch"; return; }
-      if (currentTab === "batch") { mb.setText(t("create_batch")); mb.show(); } else { mb.hide(); }
-    }
-
-    $("recipe").addEventListener("change", () => {
-      const r = selectedRecipe();
-      if (r && !$("planned").value) $("planned").value = r.base_yield;
-      renderIngredients();
-    });
-    $("planned").addEventListener("input", renderIngredients);
-    $("batch-date").value = App.today();
-    $("fallback-submit").addEventListener("click", submitBatch);
-    if (tg) tg.MainButton.onClick(submitBatch);
-
-    App.initTabs((tab) => {
-      currentTab = tab;
-      updateMainButton();
-      if (tab === "history") loadHistory();
-    });
     loadRecipes();
+    loadHistory();
+    // Кнопка «История» / «Рецепты» в боте открывает ?tab=... — прокручиваем к нужному блоку
+    const tab = new URLSearchParams(location.search).get("tab");
+    if (tab === "history") $("history-section").scrollIntoView({ block: "start" });
   </script>
 </body>
 </html>

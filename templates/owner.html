@@ -2,257 +2,419 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
   <title>Kuxnya NVGR — Owner</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- Chart.js с CDN; если он не загрузится, карточки и клиенты всё равно работают -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-  <div class="tabs">
-    <button data-tab="stats" data-i18n="btn_stats"></button>
-    <button data-tab="clients" data-i18n="btn_clients"></button>
-  </div>
+  <!--
+    Главный экран владельца.
+    Исправления из технического обзора:
+     - запросы к API только по относительным путям /api/... (App.api в static/js/app.js);
+     - response.ok проверяется ДО парсинга JSON: 403/500 показываются текстом ошибки, а не нулевой выручкой;
+     - список клиентов берётся из /api/stats (by_client) и /api/clients — «Загрузка…» не зависает.
+  -->
+  <main class="app">
 
-  <!-- ============ Статистика ============ -->
-  <section data-panel="stats" hidden>
-    <div class="card">
-      <label for="period" data-i18n="period"></label>
-      <select id="period">
-        <option value="all" data-i18n="period_all"></option>
-        <option value="month" data-i18n="period_month"></option>
-        <option value="year" data-i18n="period_year"></option>
-      </select>
-    </div>
-
-    <div id="stats-loader" class="loader" data-i18n="loading"></div>
-    <div id="stats-error" class="card danger" hidden></div>
-
-    <div id="stats-content" hidden>
-      <div class="grid">
-        <div class="stat wide"><div class="label" data-i18n="revenue"></div><div class="value" id="s-revenue"></div></div>
-        <div class="stat"><div class="label" data-i18n="cost"></div><div class="value" id="s-cost"></div></div>
-        <div class="stat"><div class="label" data-i18n="profit"></div><div class="value" id="s-profit"></div></div>
-        <div class="stat"><div class="label" data-i18n="margin"></div><div class="value" id="s-margin"></div></div>
-        <div class="stat"><div class="label" data-i18n="portions"></div><div class="value" id="s-portions"></div></div>
-        <div class="stat"><div class="label" data-i18n="purchases_total"></div><div class="value" id="s-purchases"></div></div>
-        <div class="stat"><div class="label" data-i18n="stock_value"></div><div class="value" id="s-stock"></div></div>
+    <!-- ===== Верхняя панель: приветствие и баланс клиентов ===== -->
+    <header class="topbar">
+      <div>
+        <div class="hello" id="hello">Kuxnya NVGR</div>
+        <div class="subtitle" data-i18n="owner_panel"></div>
       </div>
-      <div class="card">
-        <h2 data-i18n="chart_title"></h2>
-        <div class="chart-box"><canvas id="chart"></canvas></div>
+      <div class="balance">
+        <div class="label" data-i18n="balance_label"></div>
+        <div class="value num" id="balance">—</div>
       </div>
-    </div>
-  </section>
+    </header>
 
-  <!-- ============ Клиенты ============ -->
-  <section data-panel="clients" hidden>
-    <div class="card">
-      <div id="clients-loader" class="loader" data-i18n="loading"></div>
-      <table id="clients-table" hidden>
-        <thead>
-          <tr><th data-i18n="client"></th><th class="right" data-i18n="charged"></th><th class="right" data-i18n="paid"></th><th class="right" data-i18n="debt"></th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+    <!-- ===== Период ===== -->
+    <div class="chips" id="period-chips">
+      <button type="button" class="chip active" data-period="all" data-i18n="period_all"></button>
+      <button type="button" class="chip" data-period="month" data-i18n="period_month"></button>
+      <button type="button" class="chip" data-period="year" data-i18n="period_year"></button>
+      <button type="button" class="chip" data-period="custom" data-i18n="period_custom"></button>
     </div>
 
-    <div class="card">
-      <div class="tabs" id="op-tabs">
-        <button type="button" class="active" data-op="payment" data-i18n="record_payment"></button>
-        <button type="button" data-op="delivery" data-i18n="record_delivery"></button>
+    <div id="stats-error" class="error-box" hidden></div>
+
+    <!-- ===== 4 KPI: выручка, прибыль, маржа, долги клиентов (2x2) ===== -->
+    <section class="kpi-grid" id="kpis">
+      <div class="kpi">
+        <div class="icon">💰</div>
+        <div class="label" data-i18n="revenue"></div>
+        <div class="value" id="k-revenue"><div class="skeleton line"></div></div>
+        <div class="sub" id="k-revenue-sub"></div>
       </div>
-      <form id="op-form" novalidate>
-        <label for="op-client" data-i18n="client"></label>
-        <select id="op-client" required></select>
+      <div class="kpi success">
+        <div class="icon">📈</div>
+        <div class="label" data-i18n="profit"></div>
+        <div class="value" id="k-profit"><div class="skeleton line"></div></div>
+        <div class="sub" id="k-profit-sub"></div>
+      </div>
+      <div class="kpi info">
+        <div class="icon">🎯</div>
+        <div class="label" data-i18n="margin"></div>
+        <div class="value" id="k-margin"><div class="skeleton line"></div></div>
+        <div class="sub" data-i18n="margin_hint"></div>
+      </div>
+      <div class="kpi warning">
+        <div class="icon">🧾</div>
+        <div class="label" data-i18n="kpi_debts"></div>
+        <div class="value" id="k-debts"><div class="skeleton line"></div></div>
+        <div class="sub" id="k-debts-sub"></div>
+      </div>
+    </section>
 
-        <div data-op-field="delivery" hidden>
-          <label for="op-dish" data-i18n="dish"></label>
-          <input id="op-dish" maxlength="255">
-          <label for="op-portions" data-i18n="portions_count"></label>
-          <input id="op-portions" type="number" inputmode="numeric" min="1" step="1">
-          <label for="op-cost" data-i18n="cost_label"></label>
-          <input id="op-cost" type="number" inputmode="decimal" min="0" step="any">
-        </div>
+    <!-- Дополнительные показатели -->
+    <section class="mini-stats">
+      <div class="mini-stat"><div class="label" data-i18n="portions"></div><div class="value" id="m-portions">—</div></div>
+      <div class="mini-stat"><div class="label" data-i18n="cost"></div><div class="value" id="m-cost">—</div></div>
+      <div class="mini-stat"><div class="label" data-i18n="purchases_total"></div><div class="value" id="m-purchases">—</div></div>
+      <div class="mini-stat"><div class="label" data-i18n="stock_value"></div><div class="value" id="m-stock">—</div></div>
+    </section>
 
-        <div class="row">
-          <div>
-            <label for="op-amount" data-i18n="amount"></label>
-            <input id="op-amount" type="number" inputmode="decimal" min="0" step="any" required>
-          </div>
-          <div>
-            <label for="op-date" data-i18n="date"></label>
-            <input id="op-date" type="date" required>
-          </div>
-        </div>
+    <!-- ===== Быстрые действия ===== -->
+    <section class="quick-actions">
+      <button type="button" class="quick-action" id="qa-operation"><span class="qa-icon">➕</span><span data-i18n="qa_operation"></span></button>
+      <button type="button" class="quick-action" id="qa-export"><span class="qa-icon">⬇️</span><span data-i18n="qa_export"></span></button>
+      <button type="button" class="quick-action" id="qa-settings"><span class="qa-icon">⚙️</span><span data-i18n="qa_settings"></span></button>
+    </section>
 
-        <div data-op-field="payment">
-          <label for="op-type" data-i18n="payment_type"></label>
-          <select id="op-type">
-            <option value="cash" data-i18n="cash"></option>
-            <option value="card" data-i18n="card"></option>
-            <option value="transfer" data-i18n="transfer"></option>
-          </select>
-        </div>
+    <!-- ===== График выручки по месяцам (на всю ширину) ===== -->
+    <section class="card">
+      <div class="card-head"><h2 data-i18n="chart_revenue"></h2><span class="hint" id="chart-period"></span></div>
+      <div class="chart-box"><canvas id="chart-revenue"></canvas></div>
+    </section>
 
-        <button class="btn" id="op-submit" type="submit" data-i18n="save"></button>
-      </form>
-    </div>
-  </section>
+    <!-- ===== Прибыль и себестоимость ===== -->
+    <section class="card">
+      <div class="card-head"><h2 data-i18n="chart_profit_cost"></h2></div>
+      <div class="chart-box small"><canvas id="chart-profit"></canvas></div>
+    </section>
+
+    <!-- ===== Клиенты: карточки с балансом ===== -->
+    <section class="section" id="clients-section">
+      <div class="section-title"><span data-i18n="clients_title"></span><span class="badge info" id="clients-count">—</span></div>
+      <div class="client-grid" id="clients">
+        <div class="skeleton block"></div>
+        <div class="skeleton block"></div>
+      </div>
+    </section>
+
+    <div class="footer-note">Kuxnya NVGR</div>
+  </main>
 
   <script src="/static/js/i18n.js"></script>
   <script src="/static/js/app.js"></script>
   <script>
     "use strict";
     App.init();
-    const { api, fmtMoney, fmtQty, esc, toast, showError, errorText } = App;
+    const { api, tg, fmtMoney, fmtQty, fmtShort, fmtMonth, fmtDate, esc, toast, errorText, modal, confirm, initials } = App;
     const t = I18N.t;
-    let chart = null;
-    let clientsLoaded = false;
+    const $ = (id) => document.getElementById(id);
 
-    // ---------- Статистика ----------
-    function periodRange(kind) {
+    // Состояние экрана
+    let period = { kind: "all", date_from: "", date_to: "" };
+    let lastStats = null;
+    let clientList = [];           // /api/clients — признак привязки к Telegram
+    const charts = {};
+
+    // ---------- Приветствие ----------
+    (function greet() {
+      const h = new Date().getHours();
+      const key = h < 12 ? "greet_morning" : h < 18 ? "greet_day" : "greet_evening";
+      const name = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.first_name : "";
+      $("hello").textContent = `${t(key)}${name ? ", " + name : ""} 👋`;
+    })();
+
+    // ---------- Период ----------
+    function periodQuery() {
       const now = new Date();
       const pad = (n) => String(n).padStart(2, "0");
-      if (kind === "month") return { date_from: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01` };
-      if (kind === "year") return { date_from: `${now.getFullYear()}-01-01` };
+      if (period.kind === "month") return { date_from: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01` };
+      if (period.kind === "year") return { date_from: `${now.getFullYear()}-01-01` };
+      if (period.kind === "custom") return { date_from: period.date_from, date_to: period.date_to };
       return {};
     }
 
+    function periodLabel() {
+      if (period.kind === "custom") {
+        return `${period.date_from ? fmtDate(period.date_from) : "…"} — ${period.date_to ? fmtDate(period.date_to) : "…"}`;
+      }
+      return t("period_" + period.kind);
+    }
+
+    function setPeriod(kind) {
+      period.kind = kind;
+      document.querySelectorAll("#period-chips .chip").forEach((c) => c.classList.toggle("active", c.dataset.period === kind));
+      loadStats();
+    }
+
+    document.querySelectorAll("#period-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
+      if (chip.dataset.period === "custom") return openSettings();
+      setPeriod(chip.dataset.period);
+    }));
+
+    // ---------- Загрузка статистики ----------
     async function loadStats() {
-      const loader = document.getElementById("stats-loader");
-      const errBox = document.getElementById("stats-error");
-      const content = document.getElementById("stats-content");
-      loader.hidden = false; errBox.hidden = true;
+      $("stats-error").hidden = true;
       try {
-        // api() проверяет response.ok ДО парсинга JSON — ошибки 403/500 не "ломают" страницу
-        const s = await api("/api/stats", { query: periodRange(document.getElementById("period").value) });
-        document.getElementById("s-revenue").textContent = fmtMoney(s.revenue);
-        document.getElementById("s-cost").textContent = fmtMoney(s.cost);
-        const profitEl = document.getElementById("s-profit");
-        profitEl.textContent = fmtMoney(s.profit);
-        profitEl.className = "value " + (s.profit < 0 ? "danger" : "ok");
-        document.getElementById("s-margin").textContent = s.margin + "%";
-        document.getElementById("s-portions").textContent = fmtQty(s.portions);
-        document.getElementById("s-purchases").textContent = fmtMoney(s.purchases_total);
-        document.getElementById("s-stock").textContent = fmtMoney(s.stock_value);
-        drawChart(s.by_month || []);
+        // App.api проверяет response.ok ДО парсинга JSON: 403/500 → исключение с понятным текстом
+        const s = await api("/api/stats", { query: periodQuery() });
+        lastStats = s;
+        renderKpis(s);
+        renderCharts(s.by_month || []);
         renderClients(s.by_client || []);
-        content.hidden = false;
       } catch (e) {
-        content.hidden = true;
-        errBox.textContent = errorText(e);
-        errBox.hidden = false;
-        // Вкладка «Клиенты» берёт данные из того же ответа — не оставляем её на «Загрузка…»
-        const clientsLoader = document.getElementById("clients-loader");
-        clientsLoader.className = "danger";
-        clientsLoader.textContent = errorText(e);
-        document.getElementById("clients-table").hidden = true;
-      } finally {
-        loader.hidden = true;
+        lastStats = null;
+        $("stats-error").textContent = errorText(e);
+        $("stats-error").hidden = false;
+        ["k-revenue", "k-profit", "k-margin", "k-debts"].forEach((id) => { $(id).textContent = "—"; });
+        // Вкладка клиентов не остаётся на «Загрузка…»
+        $("clients").innerHTML = `<div class="error-box">${esc(errorText(e))}</div>`;
+        $("clients-count").textContent = "—";
       }
     }
 
-    function drawChart(months) {
-      if (typeof Chart === "undefined") return; // CDN недоступен — карточки всё равно показаны
-      const style = getComputedStyle(document.documentElement);
-      const accent = style.getPropertyValue("--accent").trim() || "#2a7ae2";
-      const textColor = style.getPropertyValue("--hint").trim() || "#8e8e93";
-      if (chart) chart.destroy();
-      chart = new Chart(document.getElementById("chart"), {
+    function renderKpis(s) {
+      const debts = (s.by_client || []).reduce((acc, c) => acc + Math.max(0, c.debt), 0);
+      const overpaid = (s.by_client || []).reduce((acc, c) => acc + Math.max(0, -c.debt), 0);
+      const balance = (s.by_client || []).reduce((acc, c) => acc + c.debt, 0);
+
+      $("k-revenue").textContent = fmtShort(s.revenue);
+      $("k-revenue-sub").textContent = fmtMoney(s.revenue);
+      $("k-profit").textContent = fmtShort(s.profit);
+      $("k-profit").className = "value " + (s.profit < 0 ? "danger" : "");
+      $("k-profit-sub").textContent = fmtMoney(s.profit);
+      $("k-margin").textContent = `${Number(s.margin).toLocaleString(undefined, { maximumFractionDigits: 1 })} %`;
+      $("k-debts").textContent = fmtShort(debts);
+      $("k-debts-sub").textContent = overpaid > 0 ? `${t("overpaid")}: ${fmtMoney(overpaid)}` : fmtMoney(debts);
+      $("balance").textContent = fmtMoney(balance);
+
+      $("m-portions").textContent = fmtQty(s.portions);
+      $("m-cost").textContent = fmtShort(s.cost);
+      $("m-purchases").textContent = fmtShort(s.purchases_total);
+      $("m-stock").textContent = fmtShort(s.stock_value);
+      $("chart-period").textContent = periodLabel();
+    }
+
+    // ---------- Графики ----------
+    function renderCharts(months) {
+      if (!App.setupCharts()) return; // CDN недоступен — карточки показаны, графики пропускаем
+      const labels = months.map((m) => fmtMonth(m.month));
+      const money = (v) => fmtMoney(v);
+      const axisY = { ticks: { callback: (v) => fmtShort(v) }, grid: { color: "rgba(148,163,184,0.1)" }, border: { display: false } };
+      const axisX = { grid: { display: false }, border: { display: false } };
+      const tooltip = { callbacks: { label: (c) => ` ${c.dataset.label}: ${money(c.parsed.y)}` } };
+
+      // 1) Выручка по месяцам — столбцы с градиентом
+      if (charts.revenue) charts.revenue.destroy();
+      charts.revenue = new Chart($("chart-revenue"), {
+        type: "bar",
         data: {
-          labels: months.map((m) => m.month),
+          labels,
+          datasets: [{
+            label: t("revenue"),
+            data: months.map((m) => m.revenue),
+            backgroundColor: (ctx) => App.chartGradient(ctx, "#8b5cf6", "rgba(99,102,241,0.35)"),
+            borderRadius: 10,
+            borderSkipped: false,
+            maxBarThickness: 56,
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip },
+          scales: { x: axisX, y: axisY },
+        },
+      });
+
+      // 2) Прибыль против себестоимости — сложенные столбцы + линия маржи
+      if (charts.profit) charts.profit.destroy();
+      charts.profit = new Chart($("chart-profit"), {
+        type: "bar",
+        data: {
+          labels,
           datasets: [
-            { type: "bar", label: t("revenue"), data: months.map((m) => m.revenue), backgroundColor: accent, borderRadius: 4 },
-            { type: "line", label: t("profit"), data: months.map((m) => m.profit), borderColor: "#2fa86b", backgroundColor: "#2fa86b", tension: 0.3 },
+            { label: t("cost"), data: months.map((m) => m.cost), backgroundColor: "rgba(245,158,11,0.75)", borderRadius: 6, stack: "s", maxBarThickness: 56 },
+            { label: t("profit"), data: months.map((m) => m.profit), backgroundColor: "rgba(16,185,129,0.85)", borderRadius: 6, stack: "s", maxBarThickness: 56 },
           ],
         },
         options: {
           responsive: true, maintainAspectRatio: false,
-          plugins: {
-            legend: { labels: { color: textColor } },
-            tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmtMoney(c.parsed.y)}` } },
-          },
-          scales: {
-            x: { ticks: { color: textColor }, grid: { display: false } },
-            y: { ticks: { color: textColor, callback: (v) => Number(v).toLocaleString() } },
-          },
+          plugins: { legend: { position: "bottom" }, tooltip },
+          scales: { x: { ...axisX, stacked: true }, y: { ...axisY, stacked: true } },
         },
       });
     }
 
-    // ---------- Клиенты ----------
+    // ---------- Клиенты (карточки) ----------
     function renderClients(rows) {
-      const tbody = document.querySelector("#clients-table tbody");
-      tbody.innerHTML = rows.map((c) => `
-        <tr>
-          <td>${esc(c.client)}</td>
-          <td class="right">${fmtMoney(c.charged_total)}</td>
-          <td class="right">${fmtMoney(c.paid_total)}</td>
-          <td class="right ${c.debt > 0 ? "danger" : "ok"}">${fmtMoney(c.debt)}</td>
-        </tr>`).join("") || `<tr><td colspan="4" class="empty">${t("nothing_found")}</td></tr>`;
-      document.getElementById("clients-loader").hidden = true;
-      document.getElementById("clients-table").hidden = false;
+      $("clients-count").textContent = rows.length;
+      if (!rows.length) { $("clients").innerHTML = App.emptyHtml("🤝", "nothing_found"); return; }
+      $("clients").innerHTML = rows.map((c) => {
+        const info = clientList.find((x) => x.name === c.client);
+        const linked = info ? info.linked : false;
+        const balanceCls = c.debt > 0 ? "debt" : c.debt < 0 ? "over" : "";
+        const balanceLabel = c.debt > 0 ? t("debt") : c.debt < 0 ? t("overpaid") : t("balance_zero");
+        return `
+          <article class="client-card">
+            <div class="head">
+              <div class="avatar">${esc(initials(c.client))}</div>
+              <div class="grow" style="min-width:0">
+                <div class="name">${esc(c.client)}</div>
+                <div class="small muted">${fmtQty(c.portions)} ${esc(t("portions_short"))} ·
+                  <span class="badge ${linked ? "ok" : ""}">${esc(t(linked ? "linked" : "not_linked"))}</span></div>
+              </div>
+            </div>
+            <div class="figures">
+              <div class="figure"><div class="label">${esc(t("charged"))}</div><div class="value">${fmtShort(c.charged_total)}</div></div>
+              <div class="figure"><div class="label">${esc(t("paid"))}</div><div class="value">${fmtShort(c.paid_total)}</div></div>
+              <div class="figure ${balanceCls}"><div class="label">${esc(balanceLabel)}</div><div class="value">${fmtShort(Math.abs(c.debt))}</div></div>
+            </div>
+            <div class="actions">
+              <button type="button" class="btn secondary" data-op="payment" data-client="${esc(c.client)}">💵 ${esc(t("record_payment"))}</button>
+              <button type="button" class="btn secondary" data-op="delivery" data-client="${esc(c.client)}">📦 ${esc(t("record_delivery"))}</button>
+            </div>
+          </article>`;
+      }).join("");
     }
 
-    async function loadClientList() {
-      if (clientsLoaded) return;
-      try {
-        const clients = await api("/api/clients");
-        const sel = document.getElementById("op-client");
-        sel.innerHTML = `<option value="">${esc(t("choose_client"))}</option>` +
-          clients.map((c) => `<option value="${esc(c.name)}">${esc(c.name)}${c.linked ? "" : " · " + esc(t("not_linked"))}</option>`).join("");
-        clientsLoaded = true;
-      } catch (e) { showError(e); }
-    }
-
-    let op = "payment";
-    document.querySelectorAll("#op-tabs [data-op]").forEach((b) => b.addEventListener("click", () => {
-      op = b.dataset.op;
-      document.querySelectorAll("#op-tabs [data-op]").forEach((x) => x.classList.toggle("active", x === b));
-      document.querySelectorAll("[data-op-field]").forEach((f) => { f.hidden = f.dataset.opField !== op; });
-    }));
-
-    document.getElementById("op-date").value = App.today();
-    let opBusy = false;
-    document.getElementById("op-form").addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      if (opBusy) return;
-      const client = document.getElementById("op-client").value;
-      const amount = parseFloat(document.getElementById("op-amount").value);
-      const date = document.getElementById("op-date").value;
-      if (!client) return toast(t("choose_client"), "error");
-      if (!(amount >= 0) || (op === "payment" && !(amount > 0))) return toast(t("price_required"), "error");
-
-      let path, payload;
-      if (op === "payment") {
-        path = "/api/client/payment";
-        payload = { client, amount, date, payment_type: document.getElementById("op-type").value };
-      } else {
-        const portions = parseInt(document.getElementById("op-portions").value, 10);
-        const dish = document.getElementById("op-dish").value.trim();
-        if (!dish || !(portions > 0)) return toast(t("err_validation_error"), "error");
-        path = "/api/client/delivery";
-        payload = { client, amount, date, dish_name: dish, portions, cost: parseFloat(document.getElementById("op-cost").value) || 0 };
-      }
-
-      const btn = document.getElementById("op-submit");
-      opBusy = true; btn.disabled = true; btn.textContent = t("saving");
-      try {
-        await api(path, { json: payload }); // успех показываем только после ответа сервера
-        toast(t("saved"));
-        document.getElementById("op-amount").value = "";
-        await loadStats();
-      } catch (e) {
-        showError(e);
-      } finally {
-        opBusy = false; btn.disabled = false; btn.textContent = t("save");
-      }
+    $("clients").addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-op]");
+      if (b) openOperation(b.dataset.client, b.dataset.op);
     });
 
-    document.getElementById("period").addEventListener("change", loadStats);
-    App.initTabs((tab) => { if (tab === "clients") loadClientList(); });
-    loadStats();
+    async function loadClientList() {
+      try { clientList = await api("/api/clients"); } catch (e) { clientList = []; }
+    }
+
+    // ---------- Модальное окно: оплата / поставка ----------
+    function openOperation(clientName, op = "payment") {
+      const names = (lastStats ? lastStats.by_client.map((c) => c.client) : clientList.map((c) => c.name));
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = `
+        <div class="tabs" style="position:static">
+          <button type="button" data-op="payment">💵 ${esc(t("record_payment"))}</button>
+          <button type="button" data-op="delivery">📦 ${esc(t("record_delivery"))}</button>
+        </div>
+        <div class="field"><label>${esc(t("client"))}</label>
+          <select name="client">${names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}</select></div>
+        <div data-only="delivery" class="form">
+          <div class="field"><label>${esc(t("dish"))}</label><input name="dish" maxlength="255" autocomplete="off"></div>
+          <div class="row">
+            <div class="field"><label>${esc(t("portions_count"))}</label><input name="portions" type="number" inputmode="numeric" min="1" step="1"></div>
+            <div class="field"><label>${esc(t("cost_label"))}</label><input name="cost" type="number" inputmode="decimal" min="0" step="any"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field"><label>${esc(t("amount"))}</label><input name="amount" type="number" inputmode="decimal" min="0" step="any"></div>
+          <div class="field"><label>${esc(t("date"))}</label><input name="date" type="date" value="${App.today()}"></div>
+        </div>
+        <div data-only="payment" class="field"><label>${esc(t("payment_type"))}</label>
+          <select name="ptype">
+            <option value="cash">${esc(t("cash"))}</option><option value="card">${esc(t("card"))}</option><option value="transfer">${esc(t("transfer"))}</option>
+          </select></div>`;
+      const f = (n) => body.querySelector(`[name="${n}"]`);
+      if (clientName) f("client").value = clientName;
+
+      function switchOp(next) {
+        op = next;
+        body.querySelectorAll(".tabs [data-op]").forEach((x) => x.classList.toggle("active", x.dataset.op === op));
+        body.querySelectorAll("[data-only]").forEach((x) => { x.hidden = x.dataset.only !== op; });
+      }
+      body.querySelectorAll(".tabs [data-op]").forEach((x) => x.addEventListener("click", () => switchOp(x.dataset.op)));
+      switchOp(op);
+
+      modal({
+        title: t("operation_title"),
+        body,
+        actions: [
+          { label: t("cancel"), kind: "secondary" },
+          { label: t("save"), onClick: async () => {
+            const client = f("client").value;
+            const amount = parseFloat(f("amount").value);
+            const date = f("date").value || App.today();
+            body.querySelectorAll(".invalid").forEach((x) => x.classList.remove("invalid"));
+            let path, payload, question;
+            if (op === "payment") {
+              if (!(amount > 0)) { f("amount").classList.add("invalid"); toast(t("price_required"), "error"); return false; }
+              path = "/api/client/payment";
+              payload = { client, amount, date, payment_type: f("ptype").value };
+              question = t("confirm_payment", { amount: fmtMoney(amount), client: esc(client) });
+            } else {
+              const dish = f("dish").value.trim();
+              const portions = parseInt(f("portions").value, 10);
+              if (!dish) { f("dish").classList.add("invalid"); toast(t("err_validation_error"), "error"); return false; }
+              if (!(portions > 0)) { f("portions").classList.add("invalid"); toast(t("quantity_required"), "error"); return false; }
+              if (!(amount >= 0) || f("amount").value === "") { f("amount").classList.add("invalid"); toast(t("price_required"), "error"); return false; }
+              path = "/api/client/delivery";
+              payload = { client, amount, date, dish_name: dish, portions, cost: parseFloat(f("cost").value) || 0 };
+              question = t("confirm_delivery", { dish: esc(dish), portions, amount: fmtMoney(amount), client: esc(client) });
+            }
+            if (!(await confirm(question, { icon: op === "payment" ? "💵" : "📦" }))) return false;
+            await api(path, { json: payload });     // успех — только после ответа сервера
+            toast(t("saved"));
+            loadStats();
+          } },
+        ],
+      });
+    }
+
+    $("qa-operation").addEventListener("click", () => openOperation(null, "payment"));
+
+    // ---------- Экспорт: бот присылает CSV в чат ----------
+    $("qa-export").addEventListener("click", async () => {
+      if (!(await confirm(esc(t("export_confirm", { period: periodLabel() })), { icon: "📊", okLabel: t("send") }))) return;
+      const btn = $("qa-export");
+      btn.disabled = true;
+      try {
+        await api("/api/stats/export-send", { json: { date_from: periodQuery().date_from || null, date_to: periodQuery().date_to || null } });
+        toast(t("export_sent"));
+      } catch (e) { App.showError(e); } finally { btn.disabled = false; }
+    });
+
+    // ---------- Настройки: свой период и поддержка ----------
+    function openSettings() {
+      const body = `
+        <div class="field"><label>${esc(t("period_custom"))}</label>
+          <div class="row">
+            <input type="date" name="from" value="${esc(period.date_from)}" aria-label="${esc(t("date_from"))}">
+            <input type="date" name="to" value="${esc(period.date_to)}" aria-label="${esc(t("date_to"))}">
+          </div></div>
+        <div class="card" style="box-shadow:none;background:rgba(51,65,85,.35)">
+          <div class="small muted">${esc(t("language_hint"))}</div>
+        </div>`;
+      modal({
+        title: t("settings_title"),
+        body,
+        actions: [
+          { label: t("cancel"), kind: "secondary" },
+          { label: t("apply"), onClick: (m) => {
+            const from = m.body.querySelector('[name="from"]').value;
+            const to = m.body.querySelector('[name="to"]').value;
+            if (from && to && from > to) { toast(t("err_period"), "error"); return false; }
+            period.date_from = from; period.date_to = to;
+            setPeriod(from || to ? "custom" : "all");
+          } },
+        ],
+      });
+    }
+    $("qa-settings").addEventListener("click", openSettings);
+
+    // Кнопка «🤝 Клиенты» в боте открывает ?tab=clients — прокручиваем к клиентам
+    const startTab = new URLSearchParams(location.search).get("tab");
+
+    (async function start() {
+      await Promise.all([loadClientList(), loadStats()]);
+      if (startTab === "clients") $("clients-section").scrollIntoView({ behavior: "smooth", block: "start" });
+    })();
   </script>
 </body>
 </html>

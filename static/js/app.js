@@ -149,11 +149,162 @@
     return activate;
   }
 
+  // ---------- Модальные окна (вместо alert/confirm) ----------
+  let openModals = 0;
+
+  /**
+   * Открывает модальное окно.
+   * @param {object} o  { title, body: строка HTML или DOM-узел, actions: [{ label, kind, onClick }] }
+   *   kind: "primary" | "secondary" | "success" | "danger".
+   *   onClick(m) может быть async; если вернёт false — окно не закрывается.
+   * @returns {{ el, body, close }}
+   */
+  function modal(o) {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    backdrop.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-head"><h2></h2><button type="button" class="icon-btn" aria-label="Close">✕</button></div>
+        <div class="modal-body"></div>
+        <div class="modal-foot"></div>
+      </div>`;
+    backdrop.querySelector("h2").textContent = o.title || "";
+    const body = backdrop.querySelector(".modal-body");
+    if (typeof o.body === "string") body.innerHTML = o.body; else if (o.body) body.appendChild(o.body);
+    const foot = backdrop.querySelector(".modal-foot");
+    const actions = o.actions || [];
+    if (!actions.length) foot.remove();
+    if (actions.length === 1) foot.classList.add("single");
+
+    let closed = false;
+    const onBack = () => close();
+    function close() {
+      if (closed) return;
+      closed = true;
+      openModals -= 1;
+      document.removeEventListener("keydown", onKey);
+      if (tg && tg.BackButton) { tg.BackButton.offClick(onBack); if (!openModals) tg.BackButton.hide(); }
+      backdrop.classList.add("closing");
+      setTimeout(() => backdrop.remove(), 200);
+      if (o.onClose) o.onClose();
+    }
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+
+    actions.forEach((a) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn" + (a.kind && a.kind !== "primary" ? " " + a.kind : "");
+      b.textContent = a.label;
+      b.addEventListener("click", async () => {
+        if (!a.onClick) return close();
+        const buttons = foot.querySelectorAll("button");
+        buttons.forEach((x) => { x.disabled = true; });
+        const label = b.textContent;
+        b.innerHTML = `<span class="spinner"></span>`;
+        let keepOpen = false;
+        try { keepOpen = (await a.onClick(m)) === false; } catch (err) { showError(err); keepOpen = true; }
+        finally { buttons.forEach((x) => { x.disabled = false; }); b.textContent = label; }
+        if (!keepOpen) close();
+      });
+      foot.appendChild(b);
+    });
+
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+    backdrop.querySelector(".icon-btn").addEventListener("click", close);
+    document.addEventListener("keydown", onKey);
+    if (tg && tg.BackButton && tg.initData) { tg.BackButton.onClick(onBack); tg.BackButton.show(); }
+    document.body.appendChild(backdrop);
+    openModals += 1;
+    I18N.apply(backdrop);
+    const m = { el: backdrop, body, close };
+    return m;
+  }
+
+  /**
+   * Подтверждение действия. Возвращает Promise<boolean>.
+   * @param {string} text  вопрос (можно HTML — экранируйте данные через esc)
+   */
+  function confirmDialog(text, { title, okLabel, kind = "primary", icon = "❓" } = {}) {
+    return new Promise((resolve) => {
+      let result = false;
+      modal({
+        title: title || I18N.t("confirm_title"),
+        body: `<div class="confirm-icon">${icon}</div><div class="confirm-text">${text}</div>`,
+        actions: [
+          { label: I18N.t("cancel"), kind: "secondary" },
+          { label: okLabel || I18N.t("confirm"), kind, onClick: () => { result = true; } },
+        ],
+        onClose: () => resolve(result),
+      });
+    });
+  }
+
+  /** Инициалы для аватара: «NO NAMELA» → «NN» */
+  function initials(name) {
+    return String(name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+  }
+
+  /** Короткая сумма для карточек: 22 170 000 → «22,17 млн» */
+  function fmtShort(v) {
+    const n = Number(v || 0);
+    const abs = Math.abs(n);
+    const loc = numberLocale();
+    if (abs >= 1e6) return (n / 1e6).toLocaleString(loc, { maximumFractionDigits: 2 }) + " " + I18N.t("mln");
+    if (abs >= 1e4) return (n / 1e3).toLocaleString(loc, { maximumFractionDigits: 1 }) + " " + I18N.t("thousand");
+    return n.toLocaleString(loc, { maximumFractionDigits: 0 });
+  }
+
+  /** Пустое состояние списка */
+  function emptyHtml(icon, textKey) {
+    return `<div class="empty"><span class="e-icon">${icon}</span>${esc(I18N.t(textKey))}</div>`;
+  }
+
+  /** Скелетон-заглушка на время загрузки */
+  function skeletonHtml(lines = 3) {
+    return Array.from({ length: lines }, () => `<div class="skeleton line"></div>`).join("");
+  }
+
+  /** Единые цвета графиков Chart.js под тёмную тему */
+  function setupCharts() {
+    if (typeof Chart === "undefined") return false;
+    Chart.defaults.color = "#94a3b8";
+    Chart.defaults.borderColor = "rgba(148, 163, 184, 0.12)";
+    Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+    Chart.defaults.font.size = 12;
+    Chart.defaults.plugins.legend.labels.usePointStyle = true;
+    Chart.defaults.plugins.legend.labels.boxWidth = 8;
+    Chart.defaults.plugins.tooltip.backgroundColor = "#0b1222";
+    Chart.defaults.plugins.tooltip.borderColor = "rgba(148, 163, 184, 0.3)";
+    Chart.defaults.plugins.tooltip.borderWidth = 1;
+    Chart.defaults.plugins.tooltip.padding = 10;
+    Chart.defaults.plugins.tooltip.cornerRadius = 10;
+    return true;
+  }
+
+  /** Вертикальный градиент для столбцов/заливки графика */
+  function chartGradient(ctx, from, to) {
+    const { chartArea } = ctx.chart;
+    if (!chartArea) return from;
+    const g = ctx.chart.ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
+    g.addColorStop(0, to);
+    g.addColorStop(1, from);
+    return g;
+  }
+
+  /** Подпись месяца для графика: «2026-10» → «окт 26» */
+  function fmtMonth(ym) {
+    const [y, m] = String(ym).split("-").map(Number);
+    if (!y || !m) return ym;
+    return new Date(y, m - 1, 1).toLocaleDateString(numberLocale(), { month: "short", year: "2-digit" });
+  }
+
   /** Общая инициализация страницы */
   function init() {
     if (tg) {
       tg.ready();
       tg.expand();
+      // Шапка и фон Telegram в цвет тёмной темы приложения
+      try { tg.setHeaderColor("#0f172a"); tg.setBackgroundColor("#0f172a"); } catch (e) { /* старый клиент */ }
     }
     I18N.apply();
     if (!tg || !tg.initData) {
@@ -164,5 +315,8 @@
     }
   }
 
-  window.App = { tg, api, ApiError, errorText, fmtMoney, fmtQty, fmtDate, today, esc, toast, showError, initTabs, init };
+  window.App = {
+    tg, api, ApiError, errorText, fmtMoney, fmtQty, fmtDate, fmtMonth, fmtShort, today, esc, toast, showError,
+    initTabs, init, modal, confirm: confirmDialog, initials, emptyHtml, skeletonHtml, setupCharts, chartGradient,
+  };
 })();

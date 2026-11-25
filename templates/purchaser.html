@@ -2,248 +2,373 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
   <title>Kuxnya NVGR — Purchaser</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
   <!--
-    ИСПРАВЛЕННЫЕ БАГИ (из технического обзора):
-    1. Прогресс показывается через tg.MainButton.showProgress(), кнопка блокируется на время
-       запроса и ВСЕГДА разблокируется в finally (раньше "зависала" после ошибки).
-    2. Товар проверяется на сервере: если его нет на складе — API отвечает 400, а форма
-       показывает ошибку (раньше закупка "сохранялась" молча).
-    3. Сообщение об успехе показывается ТОЛЬКО после успешного ответа сервера (await).
-    4. Все запросы — по относительным путям /api/... (см. static/js/app.js).
+    Экран закупщика. Исправленные баги из технического обзора:
+    1. Прогресс — через tg.MainButton.showProgress() (а не tg.showProgress()); кнопка блокируется
+       на время запроса и ВСЕГДА разблокируется в finally. Повторное нажатие игнорируется (флаг saving).
+    2. Товар проверяется на сервере: нет в справочнике → 400 product_not_found → сообщение
+       «Товар не найден в справочнике». Нераспознанная ИИ позиция не подставляется на другой товар:
+       пока товар не выбран вручную, её нельзя отметить к сохранению.
+    3. «Сохранено» показывается ТОЛЬКО после успешного ответа сервера (await, проверка response.ok).
+    4. Все запросы — по относительным путям /api/... (static/js/app.js).
   -->
-  <h1 data-i18n="btn_new_purchase"></h1>
-
-  <div class="card">
-    <button class="btn secondary" id="ai-btn" type="button" data-i18n="ai_scan" style="margin-top:0"></button>
-    <input id="ai-file" type="file" accept="image/*" hidden>
-    <div id="ai-result" hidden>
-      <h2 data-i18n="ai_items"></h2>
-      <div id="ai-items"></div>
-    </div>
-  </div>
-
-  <form class="card" id="purchase-form" novalidate>
-    <label for="product" data-i18n="product"></label>
-    <select id="product" required></select>
-
-    <div class="row">
+  <main class="app">
+    <header class="topbar">
       <div>
-        <label for="quantity" data-i18n="quantity"></label>
-        <input id="quantity" type="number" inputmode="decimal" min="0" step="any" required>
+        <div class="hello">🛒 <span data-i18n="purchaser_title"></span></div>
+        <div class="subtitle" data-i18n="purchaser_subtitle"></div>
       </div>
-      <div>
-        <label for="unit" data-i18n="unit"></label>
-        <select id="unit">
-          <option value="kg">kg</option>
-          <option value="g">g</option>
-          <option value="l">l</option>
-          <option value="ml">ml</option>
-          <option value="pcs">pcs</option>
-        </select>
+      <div class="balance">
+        <div class="label" data-i18n="today_spent"></div>
+        <div class="value num" id="today-spent">—</div>
       </div>
+    </header>
+
+    <div class="tabs">
+      <button type="button" data-tab="manual" data-i18n="tab_manual"></button>
+      <button type="button" data-tab="photo" data-i18n="tab_photo"></button>
     </div>
 
-    <label for="total" data-i18n="total_price"></label>
-    <input id="total" type="number" inputmode="decimal" min="0" step="any" required>
+    <!-- ===== Ручной ввод ===== -->
+    <section data-panel="manual" hidden>
+      <form class="card form" id="manual-form" novalidate>
+        <div class="field">
+          <label for="product" data-i18n="product"></label>
+          <select id="product"></select>
+          <div class="small muted" id="product-hint"></div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="quantity" data-i18n="quantity"></label>
+            <input id="quantity" type="number" inputmode="decimal" min="0" step="any" placeholder="0">
+          </div>
+          <div class="field">
+            <label for="unit" data-i18n="unit"></label>
+            <select id="unit">
+              <option value="kg">kg</option><option value="g">g</option><option value="l">l</option>
+              <option value="ml">ml</option><option value="pcs">pcs</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="price" data-i18n="price_per_unit"></label>
+          <input id="price" type="number" inputmode="decimal" min="0" step="any" placeholder="0">
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="payment" data-i18n="payment_method"></label>
+            <select id="payment">
+              <option value="cash" data-i18n="cash"></option>
+              <option value="card" data-i18n="card"></option>
+              <option value="transfer" data-i18n="transfer"></option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="date" data-i18n="date"></label>
+            <input id="date" type="date">
+          </div>
+        </div>
+        <!-- Итоговая сумма считается автоматически: количество × цена -->
+        <div class="total-big"><span class="label" data-i18n="purchase_total"></span><span class="value" id="manual-total">0</span></div>
+        <!-- Вне Telegram — своя кнопка; в Telegram используется MainButton (одна кнопка, без дубля) -->
+        <button class="btn lg" id="save-manual" type="submit" hidden>💾 <span data-i18n="save_purchase"></span></button>
+      </form>
+    </section>
 
-    <div class="row">
-      <div>
-        <label for="payment" data-i18n="payment_method"></label>
-        <select id="payment">
-          <option value="cash" data-i18n="cash"></option>
-          <option value="card" data-i18n="card"></option>
-          <option value="transfer" data-i18n="transfer"></option>
-        </select>
-      </div>
-      <div>
-        <label for="date" data-i18n="date"></label>
-        <input id="date" type="date" required>
-      </div>
-    </div>
-    <!-- Запасная кнопка вне Telegram; внутри Telegram используется MainButton -->
-    <button class="btn" id="fallback-submit" type="submit" data-i18n="save" hidden></button>
-  </form>
+    <!-- ===== Фото чека ===== -->
+    <section data-panel="photo" hidden class="section">
+      <button type="button" class="upload" id="upload">
+        <span class="u-icon">📸</span>
+        <span class="u-title" data-i18n="ai_scan"></span>
+        <span class="u-hint" data-i18n="upload_hint"></span>
+      </button>
+      <input id="ai-file" type="file" accept="image/*" hidden>
 
-  <div class="card">
-    <h2 data-i18n="recent_purchases"></h2>
-    <div id="recent" class="loader" data-i18n="loading"></div>
-  </div>
+      <div class="card" id="ai-card" hidden>
+        <div class="card-head"><h2 data-i18n="ai_items"></h2><span class="hint" data-i18n="choose_items"></span></div>
+        <div id="ai-items"></div>
+        <div class="total-big" style="margin-top:12px"><span class="label" data-i18n="selected_total"></span><span class="value" id="ai-total">0</span></div>
+        <button class="btn lg" id="save-receipt" type="button" hidden style="margin-top:12px">💾 <span id="save-receipt-label"></span></button>
+      </div>
+    </section>
+
+    <!-- ===== Последние закупки ===== -->
+    <section class="card">
+      <div class="card-head"><h2 data-i18n="recent_purchases"></h2></div>
+      <div id="recent" class="list"></div>
+    </section>
+  </main>
 
   <script src="/static/js/i18n.js"></script>
   <script src="/static/js/app.js"></script>
   <script>
     "use strict";
     App.init();
-    const { api, tg, fmtMoney, fmtQty, fmtDate, esc, toast, showError, errorText } = App;
+    const { api, tg, fmtMoney, fmtQty, fmtDate, esc, toast, showError, errorText, confirm } = App;
     const t = I18N.t;
     const $ = (id) => document.getElementById(id);
     const UNITS = ["kg", "g", "l", "ml", "pcs"];
     const insideTelegram = Boolean(tg && tg.initData);
+    const mb = insideTelegram ? tg.MainButton : null;
 
     let stock = [];
-    let saving = false;
+    let aiItems = [];
+    let saving = false;           // защита от двойного нажатия (и MainButton, и своей кнопки)
+    let activeTab = "manual";
 
-    // ---------- Справочники ----------
+    const num = (v) => { const n = parseFloat(String(v).replace(",", ".")); return Number.isFinite(n) ? n : NaN; };
+    const round2 = (n) => Math.round(n * 100) / 100;
+
+    // ---------- Справочник товаров и последние закупки ----------
     async function loadStock() {
       try {
         stock = await api("/api/stock");
+        const prev = $("product").value;
         $("product").innerHTML = `<option value="">${esc(t("choose_product"))}</option>` +
-          stock.map((p) => `<option value="${p.id}">${esc(p.name)} (${fmtQty(p.quantity)} ${esc(p.unit)})</option>`).join("");
+          stock.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+        if (prev) $("product").value = prev;
+        updateProductHint();
+        if (aiItems.length) renderAiItems();
       } catch (e) { showError(e); }
     }
 
     async function loadRecent() {
+      $("recent").innerHTML = App.skeletonHtml(3);
       try {
         const rows = await api("/api/purchase");
-        $("recent").className = "";
+        const today = App.today();
+        const spent = rows.filter((p) => p.date === today).reduce((a, p) => a + p.total_price, 0);
+        $("today-spent").textContent = fmtMoney(spent);
         $("recent").innerHTML = rows.map((p) => `
           <div class="list-item">
-            <div><div class="title">${esc(p.product_name)}</div><div class="hint">${fmtDate(p.date)} · ${esc(t(p.payment_method))}</div></div>
-            <div class="right">${fmtMoney(p.total_price)}<div class="hint">${fmtQty(p.quantity)} ${esc(p.unit)}</div></div>
-          </div>`).join("") || `<div class="empty">${esc(t("nothing_found"))}</div>`;
-      } catch (e) { $("recent").textContent = errorText(e); }
+            <div class="lead">🧺</div>
+            <div class="grow"><div class="title">${esc(p.product_name)}</div>
+              <div class="hint">${fmtDate(p.date)} · ${fmtQty(p.quantity)} ${esc(p.unit)} · ${esc(t(p.payment_method))}</div></div>
+            <div class="amount">${fmtMoney(p.total_price)}</div>
+          </div>`).join("") || App.emptyHtml("🧺", "nothing_found");
+      } catch (e) {
+        $("recent").innerHTML = `<div class="error-box">${esc(errorText(e))}</div>`;
+      }
+    }
+
+    // ---------- Ручной ввод: автоподсчёт суммы ----------
+    function manualTotal() {
+      const q = num($("quantity").value), p = num($("price").value);
+      return q > 0 && p >= 0 ? round2(q * p) : 0;
+    }
+    function updateManualTotal() { $("manual-total").textContent = fmtMoney(manualTotal()); }
+
+    function updateProductHint() {
+      const p = stock.find((x) => String(x.id) === $("product").value);
+      $("product-hint").textContent = p
+        ? `${t("in_stock")}: ${fmtQty(p.quantity)} ${p.unit} · ${t("last_price")}: ${fmtMoney(p.price_per_unit)} / ${p.unit}`
+        : "";
     }
 
     $("product").addEventListener("change", () => {
       const p = stock.find((x) => String(x.id) === $("product").value);
-      if (p && UNITS.includes(p.unit)) $("unit").value = p.unit;
+      if (p) {
+        if (UNITS.includes(p.unit)) $("unit").value = p.unit;
+        if (!$("price").value && p.price_per_unit) $("price").value = p.price_per_unit; // подсказка: последняя цена
+      }
       $("product").classList.remove("invalid");
+      updateProductHint();
+      updateManualTotal();
     });
+    ["quantity", "price"].forEach((id) => $(id).addEventListener("input", () => { $(id).classList.remove("invalid"); updateManualTotal(); }));
 
-    // ---------- Сохранение закупки ----------
-    function validateForm() {
-      let ok = true;
-      const mark = (id, bad) => { $(id).classList.toggle("invalid", bad); if (bad) ok = false; };
-      mark("product", !$("product").value);
-      mark("quantity", !(parseFloat($("quantity").value) > 0));
-      mark("total", !(parseFloat($("total").value) >= 0) || $("total").value === "");
-      if (!$("product").value) toast(t("product_required"), "error");
-      else if (!(parseFloat($("quantity").value) > 0)) toast(t("quantity_required"), "error");
-      else if (!ok) toast(t("price_required"), "error");
-      return ok;
+    function validateManual() {
+      const bad = [];
+      if (!$("product").value) bad.push(["product", "product_required"]);
+      if (!(num($("quantity").value) > 0)) bad.push(["quantity", "quantity_required"]);
+      if (!(num($("price").value) >= 0) || $("price").value === "") bad.push(["price", "price_required"]);
+      ["product", "quantity", "price"].forEach((id) => $(id).classList.toggle("invalid", bad.some(([b]) => b === id)));
+      if (bad.length) { toast(t(bad[0][1]), "error"); return false; }
+      return true;
     }
 
-    async function savePurchase() {
-      if (saving) return;               // защита от двойного нажатия
-      if (!validateForm()) return;
-
+    /** Блокировка кнопок на время запроса. БАГ 1: прогресс именно через MainButton */
+    function lock() {
       saving = true;
-      const mb = insideTelegram ? tg.MainButton : null;
-      if (mb) { mb.showProgress(false); mb.disable(); }   // БАГ 1: прогресс через MainButton
-      $("fallback-submit").disabled = true;
+      if (mb) { mb.showProgress(false); mb.disable(); }
+      $("save-manual").disabled = true; $("save-receipt").disabled = true;
+    }
+    function unlock() {
+      saving = false;
+      if (mb) { mb.hideProgress(); mb.enable(); }
+      $("save-manual").disabled = false; $("save-receipt").disabled = false;
+    }
+
+    async function saveManual() {
+      if (saving) return;                       // двойное нажатие — игнорируем
+      if (!validateManual()) return;
+      const product = stock.find((x) => String(x.id) === $("product").value);
+      const payload = {
+        product_id: Number($("product").value),
+        quantity: num($("quantity").value),
+        unit: $("unit").value,
+        total_price: manualTotal(),
+        payment_method: $("payment").value,
+        date: $("date").value || App.today(),
+      };
+      const ok = await confirm(t("confirm_purchase", {
+        product: esc(product ? product.name : ""), qty: fmtQty(payload.quantity), unit: esc(payload.unit), amount: fmtMoney(payload.total_price),
+      }), { icon: "🛒", okLabel: t("save") });
+      if (!ok || saving) return;
+
+      lock();
       try {
-        // БАГ 3: ждём ответ сервера; успех — только если api() не бросил ошибку
-        const res = await api("/api/purchase", { json: {
-          product_id: Number($("product").value),
-          quantity: parseFloat($("quantity").value),
-          unit: $("unit").value,
-          total_price: parseFloat($("total").value),
-          payment_method: $("payment").value,
-          date: $("date").value || App.today(),
-        } });
+        // БАГ 3: ждём ответ сервера; «сохранено» — только если api() не бросил ошибку
+        const res = await api("/api/purchase", { json: payload });
         toast(`${t("purchase_saved")} · ${res.product_name} +${fmtQty(res.quantity)} ${res.unit}`);
-        $("quantity").value = ""; $("total").value = "";
+        $("quantity").value = ""; $("price").value = "";
+        updateManualTotal();
         await Promise.all([loadStock(), loadRecent()]);
-        $("product").value = String(res.stock.id);
       } catch (e) {
-        // БАГ 2: сервер вернул 400 product_not_found / unit_mismatch → показываем причину
-        showError(e);
+        showError(e);                           // БАГ 2: 400 product_not_found → «Товар не найден в справочнике»
       } finally {
-        // БАГ 1: кнопка разблокируется ВСЕГДА, даже после ошибки сети
-        saving = false;
-        if (mb) { mb.hideProgress(); mb.enable(); }
-        $("fallback-submit").disabled = false;
+        unlock();                               // БАГ 1: кнопка разблокируется ВСЕГДА
       }
     }
+    $("manual-form").addEventListener("submit", (ev) => { ev.preventDefault(); saveManual(); });
 
-    $("purchase-form").addEventListener("submit", (ev) => { ev.preventDefault(); savePurchase(); });
-
-    // ---------- ИИ-распознавание чека ----------
-    let aiItems = [];
-
-    $("ai-btn").addEventListener("click", () => $("ai-file").click());
+    // ---------- Фото чека: распознавание ----------
+    $("upload").addEventListener("click", () => $("ai-file").click());
 
     $("ai-file").addEventListener("change", async () => {
       const file = $("ai-file").files[0];
       if (!file) return;
-      const btn = $("ai-btn");
-      btn.disabled = true; btn.textContent = t("ai_processing");
+      const up = $("upload");
+      up.disabled = true;
+      up.querySelector(".u-icon").innerHTML = `<span class="spinner" style="width:36px;height:36px"></span>`;
+      up.querySelector(".u-title").textContent = t("ai_processing");
       try {
         const form = new FormData();
         form.append("file", file);
         const res = await api("/api/parse-receipt", { form });
-        aiItems = res.items.map((i) => ({ ...i, state: "pending" }));
+        // Отмечаем только позиции, которые сервер сопоставил со справочником.
+        // Нераспознанные НЕ подставляются на другой товар (БАГ 2).
+        aiItems = res.items.map((i) => ({ ...i, product_id: i.product_id || null, checked: Boolean(i.product_id), state: "pending", error: "" }));
         renderAiItems();
+        $("ai-card").hidden = false;
+        if (!aiItems.length) toast(t("nothing_found"), "warning");
       } catch (e) {
-        showError(e); // 503 — Gemini недоступен, 429 — лимит, 502 — плохой ответ
+        showError(e); // 503 — ИИ недоступен, 429 — лимит, 502 — не удалось разобрать
       } finally {
-        btn.disabled = false; btn.textContent = t("ai_scan");
-        $("ai-file").value = ""; // чтобы можно было выбрать тот же файл ещё раз
+        up.disabled = false;
+        up.querySelector(".u-icon").textContent = "📸";
+        up.querySelector(".u-title").textContent = t("ai_scan");
+        $("ai-file").value = "";               // можно выбрать тот же файл ещё раз
       }
     });
 
-    function productOptions(selectedId) {
-      return `<option value="">${esc(t("not_in_stock"))}</option>` +
-        stock.map((p) => `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>${esc(p.name)}</option>`).join("");
-    }
+    function selectedItems() { return aiItems.filter((i) => i.checked && i.product_id && i.state !== "added"); }
 
     function renderAiItems() {
-      $("ai-result").hidden = false;
-      if (!aiItems.length) { $("ai-items").innerHTML = `<div class="empty">${esc(t("nothing_found"))}</div>`; return; }
-      $("ai-items").innerHTML = aiItems.map((i, idx) => `
-        <div class="list-item" style="flex-direction:column">
-          <div><span class="title">${esc(i.name)}</span> — ${fmtQty(i.quantity)} ${esc(i.unit)} · ${fmtMoney(i.total_price)}</div>
-          ${i.state === "pending" ? `
-            <select data-ai-product="${idx}">${productOptions(i.product_id)}</select>
-            <div class="row">
-              <button type="button" class="btn-sm primary" data-ai-add="${idx}">${esc(t("add"))}</button>
-              <button type="button" class="btn-sm" data-ai-skip="${idx}">${esc(t("skip"))}</button>
-            </div>` : `<span class="badge ${i.state === "added" ? "ok" : ""}">${esc(t(i.state))}</span>`}
-        </div>`).join("");
+      if (!aiItems.length) { $("ai-items").innerHTML = App.emptyHtml("🧾", "nothing_found"); updateReceiptFooter(); return; }
+      $("ai-items").innerHTML = aiItems.map((i, idx) => {
+        const done = i.state === "added";
+        const options = `<option value="">${esc(t("not_matched"))}</option>` +
+          stock.map((p) => `<option value="${p.id}" ${p.id === i.product_id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+        return `
+          <div class="check-item ${i.checked && !done ? "selected" : ""} ${done ? "done" : ""}">
+            <label class="checkbox">
+              <input type="checkbox" data-check="${idx}" ${i.checked ? "checked" : ""} ${!i.product_id || done ? "disabled" : ""} aria-label="${esc(i.name)}">
+              <span class="box"></span>
+            </label>
+            <div style="min-width:0">
+              <div class="title">${esc(i.name)}</div>
+              <div class="meta">${fmtQty(i.quantity)} ${esc(i.unit)} · <b>${fmtMoney(i.total_price)}</b></div>
+              ${done ? `<span class="badge ok" style="margin-top:8px">✅ ${esc(t("added"))}</span>`
+                : `<select data-product="${idx}" class="${i.product_id ? "" : "invalid"}">${options}</select>`}
+              ${i.error ? `<div class="small danger" style="margin-top:6px">${esc(i.error)}</div>` : ""}
+            </div>
+          </div>`;
+      }).join("");
+      updateReceiptFooter();
     }
 
-    $("ai-items").addEventListener("click", async (ev) => {
-      const addIdx = ev.target.dataset.aiAdd;
-      const skipIdx = ev.target.dataset.aiSkip;
-      if (skipIdx !== undefined) { aiItems[skipIdx].state = "skipped"; renderAiItems(); return; }
-      if (addIdx === undefined) return;
+    function updateReceiptFooter() {
+      const sel = selectedItems();
+      const total = sel.reduce((a, i) => a + i.total_price, 0);
+      $("ai-total").textContent = fmtMoney(total);
+      $("save-receipt-label").textContent = t("save_selected", { n: sel.length });
+      if (activeTab === "photo") updateMainButton();
+    }
 
-      const item = aiItems[addIdx];
-      const productId = Number(document.querySelector(`[data-ai-product="${addIdx}"]`).value);
-      if (!productId) return toast(t("err_product_not_found"), "error");
-
-      ev.target.disabled = true;
-      try {
-        const unit = UNITS.includes(item.unit) ? item.unit : null; // неизвестная единица → единица склада
-        await api("/api/purchase", { json: {
-          product_id: productId, quantity: item.quantity, unit,
-          total_price: item.total_price, payment_method: $("payment").value, date: $("date").value || App.today(),
-        } });
-        item.state = "added";
-        toast(t("purchase_saved"));
-        renderAiItems();
-        loadStock(); loadRecent();
-      } catch (e) {
-        showError(e);
-        ev.target.disabled = false;
+    $("ai-items").addEventListener("change", (ev) => {
+      const c = ev.target.dataset.check, p = ev.target.dataset.product;
+      if (c !== undefined) { aiItems[c].checked = ev.target.checked; }
+      if (p !== undefined) {
+        const id = Number(ev.target.value) || null;
+        aiItems[p].product_id = id;
+        aiItems[p].checked = Boolean(id);      // выбрали товар вручную — отмечаем, сняли — снимаем
+        aiItems[p].error = "";
       }
+      renderAiItems();
     });
+
+    async function saveReceipt() {
+      if (saving) return;
+      const items = selectedItems();
+      if (!items.length) { toast(t("choose_items"), "error"); return; }
+      const total = items.reduce((a, i) => a + i.total_price, 0);
+      const ok = await confirm(t("confirm_receipt", { n: items.length, amount: fmtMoney(total) }), { icon: "🧾", okLabel: t("save") });
+      if (!ok || saving) return;
+
+      lock();
+      let saved = 0;
+      try {
+        // Позиции сохраняются по одной: ошибка одной не теряет остальные
+        for (const item of items) {
+          try {
+            await api("/api/purchase", { json: {
+              product_id: item.product_id,
+              quantity: item.quantity,
+              unit: UNITS.includes(item.unit) ? item.unit : null,   // неизвестная единица → единица склада
+              total_price: item.total_price,
+              payment_method: $("payment").value,
+              date: $("date").value || App.today(),
+            } });
+            item.state = "added"; item.checked = false; item.error = ""; saved += 1;
+          } catch (e) {
+            item.error = errorText(e);           // например «Товар не найден в справочнике»
+          }
+        }
+        renderAiItems();
+        toast(t("receipt_saved", { ok: saved, n: items.length }), saved === items.length ? "ok" : "error");
+        await Promise.all([loadStock(), loadRecent()]);
+      } finally {
+        unlock();
+      }
+    }
+    $("save-receipt").addEventListener("click", saveReceipt);
+
+    // ---------- Главная кнопка Telegram / своя кнопка ----------
+    function updateMainButton() {
+      if (!mb) {
+        $("save-manual").hidden = activeTab !== "manual";
+        $("save-receipt").hidden = activeTab !== "photo";
+        return;
+      }
+      if (activeTab === "manual") { mb.setText("💾 " + t("save_purchase")); mb.show(); }
+      else if (aiItems.length) { mb.setText("💾 " + t("save_selected", { n: selectedItems().length })); mb.show(); }
+      else mb.hide();
+    }
+
+    if (mb) mb.onClick(() => (activeTab === "manual" ? saveManual() : saveReceipt()));
 
     // ---------- Запуск ----------
     $("date").value = App.today();
-    if (insideTelegram) {
-      tg.MainButton.setText(t("save"));
-      tg.MainButton.onClick(savePurchase);
-      tg.MainButton.show();
-    } else {
-      $("fallback-submit").hidden = false;
-    }
+    updateManualTotal();
+    App.initTabs((tab) => { activeTab = tab === "photo" ? "photo" : "manual"; updateMainButton(); });
     loadStock();
     loadRecent();
   </script>

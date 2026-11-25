@@ -2,60 +2,89 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
   <title>Kuxnya NVGR — Client</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-  <h1 id="client-name">Kuxnya NVGR</h1>
-
-  <!-- Только для владельца: выбор компании, чей кабинет проверяем -->
-  <div class="card" id="picker-card" hidden>
-    <label for="client-picker" data-i18n="choose_client"></label>
-    <select id="client-picker"></select>
-  </div>
-
-  <div class="tabs">
-    <button data-tab="deliveries" data-i18n="tab_deliveries"></button>
-    <button data-tab="invoice" data-i18n="tab_invoice"></button>
-    <button data-tab="act" data-i18n="tab_act"></button>
-  </div>
-
-  <!-- ============ Поставки ============ -->
-  <section data-panel="deliveries" hidden>
-    <div class="grid">
-      <div class="stat"><div class="label" data-i18n="portions"></div><div class="value" id="d-portions">—</div></div>
-      <div class="stat"><div class="label" data-i18n="total"></div><div class="value" id="d-total">—</div></div>
-    </div>
-    <div class="card"><div id="deliveries" class="loader" data-i18n="loading"></div></div>
-  </section>
-
-  <!-- ============ Счёт ============ -->
-  <section data-panel="invoice" hidden>
-    <div class="grid">
-      <div class="stat"><div class="label" data-i18n="charged"></div><div class="value" id="i-charged">—</div></div>
-      <div class="stat"><div class="label" data-i18n="paid"></div><div class="value" id="i-paid">—</div></div>
-      <div class="stat wide"><div class="label" data-i18n="debt"></div><div class="value" id="i-debt">—</div></div>
-    </div>
-    <div class="card">
-      <h2 data-i18n="paid"></h2>
-      <div id="payments" class="loader" data-i18n="loading"></div>
-    </div>
-  </section>
-
-  <!-- ============ Акт сверки ============ -->
-  <section data-panel="act" hidden>
-    <div class="card">
-      <p class="hint" data-i18n="act_hint"></p>
-      <div class="row">
-        <div><label for="act-from" data-i18n="date_from"></label><input id="act-from" type="date"></div>
-        <div><label for="act-to" data-i18n="date_to"></label><input id="act-to" type="date"></div>
+  <!--
+    Кабинет клиента: начислено / оплачено / долг, поставки, оплаты, PDF акт сверки.
+    Безопасность: сервер отдаёт только данные клиента, привязанного к Telegram из initData.
+    Владелец (OWNER_IDS) видит список компаний и может выбрать любую — для проверки кабинета.
+  -->
+  <main class="app">
+    <header class="topbar">
+      <div style="min-width:0">
+        <div class="hello" id="hello">Kuxnya NVGR</div>
+        <div class="subtitle" data-i18n="client_subtitle"></div>
       </div>
-      <button class="btn" id="download-btn" type="button" data-i18n="download_pdf"></button>
-      <button class="btn secondary" id="send-btn" type="button" data-i18n="send_to_chat"></button>
+      <div class="balance">
+        <div class="label" data-i18n="portions"></div>
+        <div class="value num" id="h-portions">—</div>
+      </div>
+    </header>
+
+    <!-- Только для владельца: выбор компании, чей кабинет проверяем -->
+    <div class="card" id="picker-card" hidden>
+      <div class="field">
+        <label for="client-picker" data-i18n="choose_client"></label>
+        <select id="client-picker"></select>
+      </div>
     </div>
-  </section>
+
+    <!-- 3 карточки: начислено, оплачено, долг/переплата (цвет зависит от знака) -->
+    <section class="kpi-grid">
+      <div class="kpi">
+        <div class="icon">🧾</div>
+        <div class="label" data-i18n="charged"></div>
+        <div class="value" id="i-charged"><div class="skeleton line"></div></div>
+      </div>
+      <div class="kpi success">
+        <div class="icon">💵</div>
+        <div class="label" data-i18n="paid"></div>
+        <div class="value" id="i-paid"><div class="skeleton line"></div></div>
+      </div>
+      <div class="kpi wide" id="debt-card">
+        <div class="icon">⚖️</div>
+        <div class="label" id="debt-label" data-i18n="debt"></div>
+        <div class="value" id="i-debt"><div class="skeleton line"></div></div>
+        <div class="sub" id="debt-sub"></div>
+      </div>
+    </section>
+    <div id="invoice-error" class="error-box" hidden></div>
+
+    <div class="tabs">
+      <button type="button" data-tab="deliveries" data-i18n="tab_deliveries"></button>
+      <button type="button" data-tab="invoice" data-i18n="tab_payments"></button>
+      <button type="button" data-tab="act" data-i18n="tab_act"></button>
+    </div>
+
+    <!-- ===== Поставки ===== -->
+    <section data-panel="deliveries" hidden class="card">
+      <div class="card-head"><h2 data-i18n="tab_deliveries"></h2><span class="badge info" id="d-total">—</span></div>
+      <div id="deliveries" class="list"></div>
+    </section>
+
+    <!-- ===== Оплаты ===== -->
+    <section data-panel="invoice" hidden class="card">
+      <div class="card-head"><h2 data-i18n="tab_payments"></h2></div>
+      <div id="payments" class="list"></div>
+    </section>
+
+    <!-- ===== Акт сверки ===== -->
+    <section data-panel="act" hidden class="card form">
+      <div class="card-head" style="margin:0"><h2 data-i18n="tab_act"></h2><span style="font-size:28px">📄</span></div>
+      <p class="small muted" data-i18n="act_hint"></p>
+      <div class="row">
+        <div class="field"><label for="act-from" data-i18n="date_from"></label><input id="act-from" type="date"></div>
+        <div class="field"><label for="act-to" data-i18n="date_to"></label><input id="act-to" type="date"></div>
+      </div>
+      <button class="btn lg" id="download-btn" type="button">⬇️ <span data-i18n="download_pdf_act"></span></button>
+      <button class="btn secondary" id="send-btn" type="button">📩 <span data-i18n="send_to_chat_short"></span></button>
+    </section>
+  </main>
 
   <script src="/static/js/i18n.js"></script>
   <script src="/static/js/app.js"></script>
@@ -65,79 +94,86 @@
     const { api, tg, fmtMoney, fmtQty, fmtDate, esc, toast, showError, errorText } = App;
     const t = I18N.t;
     const $ = (id) => document.getElementById(id);
-    const loaded = {};
 
-    // Владелец может открыть кабинет конкретного клиента: /app/client?client=Название
-    // или выбрать компанию в списке (виден только владельцу — обычному клиенту /api/clients отвечает 403)
+    // Владелец может открыть кабинет клиента по ссылке ?client=Название или выбрать в списке
     const ownerClient = new URLSearchParams(location.search).get("client");
     const scope = ownerClient ? { client: ownerClient } : {};
-    let activeTab = null;
 
-    async function initOwnerPicker() {
-      let clients;
-      try {
-        clients = await api("/api/clients");
-      } catch (e) {
-        return; // обычный клиент — список недоступен, показываем свой кабинет
-      }
-      if (!clients.length) return;
-      const picker = $("client-picker");
-      picker.innerHTML = clients.map((c) =>
-        `<option value="${esc(c.name)}">${esc(c.name)}${c.linked ? "" : " · " + esc(t("not_linked"))}</option>`).join("");
-      if (!scope.client || !clients.some((c) => c.name === scope.client)) scope.client = clients[0].name;
-      picker.value = scope.client;
-      $("picker-card").hidden = false;
-      picker.addEventListener("change", () => {
-        scope.client = picker.value;
-        Object.keys(loaded).forEach((k) => delete loaded[k]); // перезагрузить вкладки для новой компании
-        loadTab(activeTab);
-      });
+    function setClientName(name) {
+      $("hello").textContent = t("hello_client", { client: name });
     }
 
-    function loadTab(tab) {
-      activeTab = tab;
-      if (loaded[tab]) return;
-      loaded[tab] = true;
-      if (tab === "deliveries") loadDeliveries();
-      if (tab === "invoice") loadInvoice();
-    }
-
-    async function loadDeliveries() {
-      try {
-        const res = await api("/api/client/deliveries", { query: scope });
-        $("client-name").textContent = res.client;
-        $("d-portions").textContent = fmtQty(res.total_portions);
-        $("d-total").textContent = fmtMoney(res.total_amount);
-        $("deliveries").className = "";
-        $("deliveries").innerHTML = res.items.map((d) => `
-          <div class="list-item">
-            <div><div class="title">${esc(d.dish_name)}</div><div class="hint">${fmtDate(d.date)} · ${fmtQty(d.portions)} ${esc(t("portions_count").toLowerCase())}</div></div>
-            <div class="right">${fmtMoney(d.amount)}</div>
-          </div>`).join("") || `<div class="empty">${esc(t("no_deliveries"))}</div>`;
-      } catch (e) {
-        $("deliveries").className = "danger";
-        $("deliveries").textContent = errorText(e);
-      }
-    }
-
+    // ---------- Счёт: 3 карточки + список оплат ----------
     async function loadInvoice() {
+      $("invoice-error").hidden = true;
+      $("payments").innerHTML = App.skeletonHtml(2);
       try {
         const inv = await api("/api/client/invoice", { query: scope });
-        $("client-name").textContent = inv.client;
+        setClientName(inv.client);
         $("i-charged").textContent = fmtMoney(inv.charged);
         $("i-paid").textContent = fmtMoney(inv.paid);
-        $("i-debt").textContent = fmtMoney(inv.debt);
+        // Цвет и подпись зависят от знака: долг — красный, переплата — зелёный
+        const card = $("debt-card");
+        card.classList.remove("danger", "success");
+        if (inv.debt > 0) {
+          card.classList.add("danger");
+          $("debt-label").textContent = t("debt");
+          $("debt-sub").textContent = t("debt_hint");
+        } else if (inv.debt < 0) {
+          card.classList.add("success");
+          $("debt-label").textContent = t("overpaid");
+          $("debt-sub").textContent = t("overpaid_hint");
+        } else {
+          card.classList.add("success");
+          $("debt-label").textContent = t("balance_zero");
+          $("debt-sub").textContent = "";
+        }
+        $("i-debt").textContent = fmtMoney(Math.abs(inv.debt));
         $("i-debt").className = "value " + (inv.debt > 0 ? "danger" : "ok");
-        $("payments").className = "";
+
         $("payments").innerHTML = inv.payments.map((p) => `
-          <div class="list-item"><span>${fmtDate(p.date)} · ${esc(t(p.payment_type))}</span><span>${fmtMoney(p.amount)}</span></div>`).join("")
-          || `<div class="empty">${esc(t("nothing_found"))}</div>`;
+          <div class="list-item">
+            <div class="lead">💵</div>
+            <div class="grow"><div class="title">${esc(t(p.payment_type))}</div><div class="hint">${fmtDate(p.date)}</div></div>
+            <div class="amount ok">+${fmtMoney(p.amount)}</div>
+          </div>`).join("") || App.emptyHtml("💵", "no_payments");
       } catch (e) {
-        $("payments").className = "danger";
-        $("payments").textContent = errorText(e);
+        $("invoice-error").textContent = errorText(e);
+        $("invoice-error").hidden = false;
+        ["i-charged", "i-paid", "i-debt"].forEach((id) => { $(id).textContent = "—"; });
+        $("payments").innerHTML = "";
       }
     }
 
+    // ---------- Поставки: список, сгруппированный по месяцам ----------
+    async function loadDeliveries() {
+      $("deliveries").innerHTML = App.skeletonHtml(4);
+      try {
+        const res = await api("/api/client/deliveries", { query: scope });
+        setClientName(res.client);
+        $("h-portions").textContent = fmtQty(res.total_portions);
+        $("d-total").textContent = fmtMoney(res.total_amount);
+        if (!res.items.length) { $("deliveries").innerHTML = App.emptyHtml("📦", "no_deliveries"); return; }
+        const items = [...res.items].sort((a, b) => (a.date < b.date ? 1 : -1)); // новые сверху
+        let month = "";
+        $("deliveries").innerHTML = items.map((d) => {
+          const m = d.date.slice(0, 7);
+          const head = m !== month ? `<div class="list-group-title">${esc(App.fmtMonth(m))}</div>` : "";
+          month = m;
+          return `${head}
+            <div class="list-item">
+              <div class="lead">📦</div>
+              <div class="grow"><div class="title">${esc(d.dish_name)}</div>
+                <div class="hint">${fmtDate(d.date)} · ${fmtQty(d.portions)} ${esc(t("portions_short"))}</div></div>
+              <div class="amount">${fmtMoney(d.amount)}</div>
+            </div>`;
+        }).join("");
+      } catch (e) {
+        $("deliveries").innerHTML = `<div class="error-box">${esc(errorText(e))}</div>`;
+      }
+    }
+
+    // ---------- Акт сверки ----------
     function actPayload() {
       return { ...scope, date_from: $("act-from").value || null, date_to: $("act-to").value || null };
     }
@@ -145,14 +181,14 @@
     /** Блокирует кнопку на время запроса и всегда разблокирует в finally */
     async function withButton(btn, fn) {
       if (btn.disabled) return;
-      const label = btn.textContent;
-      btn.disabled = true; btn.textContent = t("loading");
-      try { await fn(); } catch (e) { showError(e); } finally { btn.disabled = false; btn.textContent = label; }
+      const html = btn.innerHTML;
+      btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>`;
+      try { await fn(); } catch (e) { showError(e); } finally { btn.disabled = false; btn.innerHTML = html; }
     }
 
-    // Скачивание PDF: WebView Telegram не передаёт заголовки при скачивании,
-    // поэтому получаем одноразовую ссылку (5 минут) и открываем её средствами Telegram.
+    // WebView Telegram не передаёт заголовки при скачивании, поэтому берём одноразовую ссылку (5 минут)
     $("download-btn").addEventListener("click", () => withButton($("download-btn"), async () => {
+      if ($("act-from").value && $("act-to").value && $("act-from").value > $("act-to").value) throw new Error(t("err_period"));
       const { url, file_name } = await api("/api/client/act-link", { json: actPayload() });
       if (tg && typeof tg.downloadFile === "function" && tg.isVersionAtLeast && tg.isVersionAtLeast("8.0")) {
         tg.downloadFile({ url, file_name });
@@ -169,8 +205,31 @@
       toast(t("sent_to_chat"));
     }));
 
-    // Сначала узнаём, владелец ли это (и какую компанию показать), потом грузим вкладку
-    initOwnerPicker().finally(() => App.initTabs(loadTab));
+    // ---------- Выбор компании (только владелец) ----------
+    async function initOwnerPicker() {
+      let clients;
+      try { clients = await api("/api/clients"); } catch (e) { return; } // обычный клиент — 403, это нормально
+      if (!clients.length) return;
+      const picker = $("client-picker");
+      picker.innerHTML = clients.map((c) =>
+        `<option value="${esc(c.name)}">${esc(c.name)}${c.linked ? "" : " · " + esc(t("not_linked"))}</option>`).join("");
+      if (!scope.client || !clients.some((c) => c.name === scope.client)) scope.client = clients[0].name;
+      picker.value = scope.client;
+      $("picker-card").hidden = false;
+      picker.addEventListener("change", () => {
+        scope.client = picker.value;   // перезагружаем данные новой компании
+        loadInvoice();
+        loadDeliveries();
+      });
+    }
+
+    // Сначала узнаём, владелец ли это (и какую компанию показать), потом грузим данные.
+    // Счёт и поставки грузятся один раз: они нужны и карточкам, и шапке; вкладки только переключают вид.
+    initOwnerPicker().finally(() => {
+      loadInvoice();
+      loadDeliveries();
+      App.initTabs(() => {});
+    });
   </script>
 </body>
 </html>

@@ -219,3 +219,20 @@ async def test_regular_client_cannot_list_or_pick_other_clients(client):
     # Параметр client игнорируется: обычный клиент всегда получает только свою компанию
     r = await client.get("/api/client/invoice", params={"client": "NO NAMELA"}, headers=h)
     assert r.status_code == 200 and r.json()["client"] == "FOYDALI FOOD GROUP"
+
+
+async def test_stats_csv_export_has_totals_and_clients(client):
+    """CSV-отчёт для кнопки «Экспорт»: итоги, месяцы и клиенты, BOM для Excel."""
+    from api.routers.stats import build_stats_csv
+
+    r = await client.get("/api/stats", headers=auth_headers(OWNER_ID))
+    data = build_stats_csv(r.json())
+    text = data.decode("utf-8")
+    assert text.startswith("\ufeff")
+    assert "Выручка, сум;4500000" in text
+    assert "FOYDALI FOOD GROUP;100;3000000" in text
+
+
+async def test_stats_export_forbidden_for_cook(client):
+    r = await client.post("/api/stats/export-send", json={}, headers=auth_headers(COOK_ID))
+    assert r.status_code == 403
