@@ -11,7 +11,9 @@
 """
 from __future__ import annotations
 
-LANGUAGES = {"uz": "🇺🇿 O'zbekcha", "ru": "🇷🇺 Русский", "en": "🇬🇧 English", "zh": "🇨🇳 中文"}   # как в Mini App: узбекский (латиница) первым
+from bot.uz_cyrillic import to_cyrillic
+
+LANGUAGES = {"uz": "🇺🇿 O'zbekcha", "oz": "🇺🇿 Ўзбекча", "ru": "🇷🇺 Русский", "en": "🇬🇧 English", "zh": "🇨🇳 中文"}   # как в Mini App: узбекский (латиница, кириллица) первым
 DEFAULT_LANG = "ru"
 
 TRANSLATIONS: dict[str, dict[str, str]] = {
@@ -309,12 +311,18 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
 }
 
+# Узбекский на кириллице (код "oz") — автоматически из латинской версии (bot/uz_cyrillic.py)
+TRANSLATIONS["oz"] = {key: to_cyrillic(text) for key, text in TRANSLATIONS["uz"].items()}
+
 
 def normalize_lang(lang: str | None) -> str:
     """'en-US' → 'en'; неизвестный язык → русский."""
     if not lang:
         return DEFAULT_LANG
-    code = lang.lower().split("-")[0].split("_")[0]
+    low = lang.lower().replace("_", "-")
+    if low in ("oz", "uz-cyrl", "uz-cyrl-uz"):   # узбекский на кириллице
+        return "oz"
+    code = low.split("-")[0]
     return code if code in TRANSLATIONS else DEFAULT_LANG
 
 

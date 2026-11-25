@@ -169,7 +169,7 @@ async def get_current_user(
         telegram_id=telegram_id,
         first_name=tg_user.get("first_name", ""),
         role=resolve_role(telegram_id, stored_role, settings),
-        language=language if language in {"ru", "en", "uz", "zh"} else settings.default_language,
+        language=language if language in {"ru", "en", "uz", "oz", "zh"} else settings.default_language,
     )
 
 

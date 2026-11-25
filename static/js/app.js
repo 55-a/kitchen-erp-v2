@@ -88,7 +88,7 @@
     return typeof d === "string" ? d : t("error") + " " + err.status;
   }
 
-  const numberLocale = () => ({ ru: "ru-RU", en: "en-US", uz: "uz-UZ", zh: "zh-CN" }[I18N.lang] || "ru-RU");
+  const numberLocale = () => ({ ru: "ru-RU", en: "en-US", uz: "uz-UZ", oz: "uz-Cyrl-UZ", zh: "zh-CN" }[I18N.lang] || "ru-RU");
 
   function fmtMoney(v) {
     return Number(v || 0).toLocaleString(numberLocale(), { maximumFractionDigits: 0 }) + " " + I18N.t("currency");
@@ -300,10 +300,11 @@
 
   // ---------- Язык и поддержка: кнопки в правом верхнем углу каждого экрана ----------
   const LANGS = [
-    { code: "uz", flag: "🇺🇿", name: "O'zbekcha" },
-    { code: "ru", flag: "🇷🇺", name: "Русский" },
-    { code: "en", flag: "🇬🇧", name: "English" },
-    { code: "zh", flag: "🇨🇳", name: "中文" },
+    { code: "uz", flag: "🇺🇿", name: "O'zbekcha", short: "UZ" },
+    { code: "oz", flag: "🇺🇿", name: "Ўзбекча", short: "ЎЗ" },
+    { code: "ru", flag: "🇷🇺", name: "Русский", short: "RU" },
+    { code: "en", flag: "🇬🇧", name: "English", short: "EN" },
+    { code: "zh", flag: "🇨🇳", name: "中文", short: "中文" },
   ];
   let supportUrl = null;
 
@@ -357,7 +358,7 @@
     bar.innerHTML = `
       <span class="brand">Kuxnya <b>NVGR</b> ✦</span>
       <button type="button" class="tool-btn" data-tool="support" hidden>💬 <span>${esc(I18N.t("support"))}</span></button>
-      <button type="button" class="tool-btn" data-tool="lang" aria-label="${esc(I18N.t("language"))}">${current.flag} <span>${current.code.toUpperCase()}</span></button>`;
+      <button type="button" class="tool-btn" data-tool="lang" aria-label="${esc(I18N.t("language"))}">${current.flag} <span>${current.short}</span></button>`;
     app.prepend(bar);
     bar.querySelector('[data-tool="lang"]').addEventListener("click", openLanguagePicker);
     bar.querySelector('[data-tool="support"]').addEventListener("click", openSupport);

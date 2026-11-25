@@ -244,7 +244,12 @@ def build_act_pdf(
     pdf.rect(pdf.l_margin, vibe_y, content_w, 13, style="F", round_corners=True, corner_radius=6.5)
     gradient_band(pdf, pdf.l_margin + 5, vibe_y + 4.5, 4, 4, PURPLE, PINK, steps=4)
     pdf.set_text_color(*WHITE)
-    pdf.set_font("dejavu", "B", 10.5)
+    # Длинные языки (узбекский) не помещаются в 10.5pt — уменьшаем шрифт, пока строка не влезет
+    size = 10.5
+    pdf.set_font("dejavu", "B", size)
+    while pdf.get_string_width(vibe) > content_w - 18 and size > 7:
+        size -= 0.5
+        pdf.set_font("dejavu", "B", size)
     pdf.set_xy(pdf.l_margin + 12, vibe_y)
     pdf.cell(content_w - 16, 13, vibe)
 

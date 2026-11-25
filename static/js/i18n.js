@@ -317,6 +317,44 @@
   };
   Object.keys(UI).forEach((code) => Object.assign(DICT[code], UI[code]));
 
+  /**
+   * Узбекский на кириллице (код "oz") строится из латинского автоматически —
+   * тот же алгоритм, что в bot/uz_cyrillic.py (бот и PDF-акт).
+   * Не трогаем {плейсхолдеры}, HTML-теги, /команды, @ники, ссылки и бренды.
+   */
+  const PROTECT = /(\{[^}]*\}|<[^>]+>|https?:\/\/\S+|\/[a-z_]+|@\w+|\b(?:Kuxnya|NVGR|Telegram|Excel|CSV|PDF|Gemini|Mini App|ID|UZS|FOYDALI FOOD GROUP|NO NAMELA)\b)/;
+  const SINGLE = {
+    a: "а", b: "б", d: "д", f: "ф", g: "г", h: "ҳ", i: "и", j: "ж", k: "к", l: "л", m: "м", n: "н", o: "о",
+    p: "п", q: "қ", r: "р", s: "с", t: "т", u: "у", v: "в", x: "х", y: "й", z: "з", c: "с", w: "в",
+  };
+  const Y_PAIRS = { a: "я", o: "ё", u: "ю", e: "е" };
+  const isLetter = (c) => Boolean(c) && c.toLowerCase() !== c.toUpperCase();
+  const withCase = (src, out) => (src !== src.toLowerCase() ? out.toUpperCase() : out);
+
+  function translitChunk(text) {
+    text = text.replace(/[ʻʼ‘’`´]/g, "'")
+      .replace(/([Oo])'/g, (_, c) => withCase(c, "ў"))      // o' и g' — первыми (yo'q → йўқ)
+      .replace(/([Gg])'/g, (_, c) => withCase(c, "ғ"));
+    let out = "";
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i], low = ch.toLowerCase(), nxt = (text[i + 1] || "").toLowerCase();
+      if (low === "s" && nxt === "h") { out += withCase(ch, "ш"); i++; continue; }
+      if (low === "c" && nxt === "h") { out += withCase(ch, "ч"); i++; continue; }
+      if (low === "y" && Y_PAIRS[nxt]) { out += withCase(ch, Y_PAIRS[nxt]); i++; continue; }
+      if (low === "e") { out += withCase(ch, isLetter(text[i - 1]) ? "е" : "э"); continue; }   // в начале слова — «э»
+      if (ch === "'") { out += "ъ"; continue; }                                               // ma'lumot → маълумот
+      out += SINGLE[low] ? withCase(ch, SINGLE[low]) : ch;
+    }
+    return out;
+  }
+
+  function toCyrillic(text) {
+    return String(text).split(PROTECT).map((p, i) => (i % 2 ? p : translitChunk(p))).join("");
+  }
+
+  DICT.oz = {};
+  Object.keys(DICT.uz).forEach((k) => { DICT.oz[k] = toCyrillic(DICT.uz[k]); });
+
   const SUPPORTED = Object.keys(DICT);
 
   function detectLang() {

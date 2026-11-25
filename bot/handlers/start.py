@@ -86,7 +86,7 @@ async def cb_choose_lang(callback: CallbackQuery, callback_data: LangCB) -> None
     """Сохраняем язык в БД — он используется в боте, Mini App и PDF."""
     async with session_scope() as session:
         user = await get_or_create_user(session, callback.from_user)
-        user.language = callback_data.code if callback_data.code in {"ru", "en", "uz", "zh"} else "ru"
+        user.language = callback_data.code if callback_data.code in {"ru", "en", "uz", "oz", "zh"} else "ru"
         await session.flush()
         text, kb = await build_menu(session, user)
         lang = user.language

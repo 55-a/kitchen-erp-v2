@@ -260,6 +260,8 @@ async def test_language_is_saved_and_validated(client, db):
     async with db() as s:
         from sqlalchemy import select
         assert (await s.execute(select(User.language).where(User.telegram_id == COOK_ID))).scalar_one() == "uz"
+    r = await client.post("/api/me/language", json={"language": "oz"}, headers=auth_headers(COOK_ID))
+    assert r.status_code == 200                               # узбекский на кириллице
     r = await client.post("/api/me/language", json={"language": "de"}, headers=auth_headers(COOK_ID))
     assert r.status_code == 400
 

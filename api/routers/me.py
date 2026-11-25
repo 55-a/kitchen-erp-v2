@@ -17,7 +17,7 @@ from api.models import User
 
 router = APIRouter(prefix="/api", tags=["me"])
 
-LANGUAGES = ("uz", "ru", "en", "zh")
+LANGUAGES = ("uz", "oz", "ru", "en", "zh")   # oz — узбекский на кириллице
 
 
 @router.get("/me")
@@ -34,7 +34,7 @@ async def get_me(user: AuthUser = Depends(get_current_user)) -> dict:
 
 
 class LanguageIn(BaseModel):
-    language: str = Field(pattern="^(uz|ru|en|zh)$")
+    language: str = Field(pattern="^(uz|oz|ru|en|zh)$")
 
 
 @router.post("/me/language")

@@ -106,7 +106,7 @@ async def test_lang_shows_all_languages(db):
     msg = fake_message(502)
     await cmd_lang(msg)
     markup = msg.answer.call_args.kwargs["reply_markup"]
-    assert len(keyboard_texts(markup)) == 4
+    assert len(keyboard_texts(markup)) == 5   # uz, oz (кириллица), ru, en, zh
 
 
 async def test_lang_choice_is_saved_to_db(db):
@@ -137,3 +137,38 @@ async def test_owner_in_client_role_gets_client_menu(db):
     args = cb.message.edit_text.call_args
     assert args.args[0] == t("ru", "welcome_client_owner")
     assert t("ru", "btn_deliveries") in keyboard_texts(args.kwargs["reply_markup"])
+
+
+# ------------------------------------------------------------------ Узбекский на кириллице
+
+@pytest.mark.parametrize(
+    "latin, cyrillic",
+    [
+        ("O'zbekcha", "Ўзбекча"),
+        ("so'm", "сўм"),
+        ("Yo'q", "Йўқ"),
+        ("Ma'lumotnoma", "Маълумотнома"),
+        ("Hisob-kitob yopilgan", "Ҳисоб-китоб ёпилган"),
+        ("Yetkazishlar", "Етказишлар"),
+        ("Eng qimmat", "Энг қиммат"),
+        ("Og'irlik va choyxona", "Оғирлик ва чойхона"),
+        ("Bugun", "Бугун"),
+        ("SHAHAR", "ШАҲАР"),
+    ],
+)
+async def test_uzbek_latin_to_cyrillic(latin, cyrillic):
+    from bot.uz_cyrillic import to_cyrillic
+    assert to_cyrillic(latin) == cyrillic
+
+
+async def test_cyrillic_keeps_placeholders_tags_commands_and_brands():
+    from bot.uz_cyrillic import to_cyrillic
+    src = "<b>{client}</b> mijoz kabineti · /lang · Kuxnya NVGR · Telegram {amount} so'm"
+    assert to_cyrillic(src) == "<b>{client}</b> мижоз кабинети · /lang · Kuxnya NVGR · Telegram {amount} сўм"
+
+
+async def test_cyrillic_uzbek_is_a_full_language():
+    from bot.translations import LANGUAGES, normalize_lang
+    assert "oz" in LANGUAGES and set(TRANSLATIONS["oz"]) == set(TRANSLATIONS["uz"])
+    assert TRANSLATIONS["oz"]["pdf_hero"] == "Солиштирма далолатнома"
+    assert normalize_lang("uz-Cyrl") == "oz" and normalize_lang("uz") == "uz"
