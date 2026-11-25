@@ -128,3 +128,12 @@ async def test_all_languages_have_same_keys():
     base = set(TRANSLATIONS["ru"])
     for lang, items in TRANSLATIONS.items():
         assert set(items) == base, f"{lang}: {base ^ set(items)}"
+
+
+async def test_owner_in_client_role_gets_client_menu(db):
+    """Владелец в роли «Клиент» получает меню клиента, а не «аккаунт не привязан»."""
+    cb = fake_callback(OWNER_ID)
+    await cb_choose_role(cb, RoleCB(role="client"))
+    args = cb.message.edit_text.call_args
+    assert args.args[0] == t("ru", "welcome_client_owner")
+    assert t("ru", "btn_deliveries") in keyboard_texts(args.kwargs["reply_markup"])

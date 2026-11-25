@@ -48,13 +48,19 @@ async def resolve_client(
     session: AsyncSession, user: AuthUser, tg_id: int | None, client: str | None
 ) -> Client:
     """Определяет, данные какого клиента можно отдать текущему пользователю."""
-    if user.is_owner:
+    # Владелец (в том числе переключившийся в роль «Клиент» для проверки) видит любого клиента
+    if user.is_owner or (user.role == "client" and user.is_owner_account):
         if client:
             row = (await session.execute(select(Client).where(Client.name == client))).scalar_one_or_none()
         elif tg_id:
             row = (await session.execute(select(Client).where(Client.telegram_id == tg_id))).scalar_one_or_none()
         else:
-            raise HTTPException(400, "Specify tg_id or client")
+            # Без параметров: компания, привязанная к самому владельцу, если есть
+            row = (
+                await session.execute(select(Client).where(Client.telegram_id == user.telegram_id))
+            ).scalar_one_or_none()
+            if row is None:
+                raise HTTPException(400, "Specify tg_id or client")
         if row is None:
             raise HTTPException(404, "Client not found")
         return row
@@ -229,9 +235,12 @@ async def post_act_send(
 
 @router.get("/clients")
 async def list_clients(
-    user: AuthUser = Depends(require_roles("owner")),
+    user: AuthUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
+    # Список нужен владельцу и владельцу в роли «Клиент» (выбор компании для проверки кабинета)
+    if not (user.is_owner or (user.role == "client" and user.is_owner_account)):
+        raise HTTPException(403, "Forbidden: role is not allowed")
     rows = (await session.execute(select(Client).order_by(Client.name))).scalars().all()
     return [{"id": c.id, "name": c.name, "telegram_id": c.telegram_id, "linked": bool(c.telegram_id)} for c in rows]
 

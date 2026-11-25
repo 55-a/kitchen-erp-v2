@@ -10,6 +10,12 @@
 <body>
   <h1 id="client-name">Kuxnya NVGR</h1>
 
+  <!-- Только для владельца: выбор компании, чей кабинет проверяем -->
+  <div class="card" id="picker-card" hidden>
+    <label for="client-picker" data-i18n="choose_client"></label>
+    <select id="client-picker"></select>
+  </div>
+
   <div class="tabs">
     <button data-tab="deliveries" data-i18n="tab_deliveries"></button>
     <button data-tab="invoice" data-i18n="tab_invoice"></button>
@@ -62,8 +68,39 @@
     const loaded = {};
 
     // Владелец может открыть кабинет конкретного клиента: /app/client?client=Название
+    // или выбрать компанию в списке (виден только владельцу — обычному клиенту /api/clients отвечает 403)
     const ownerClient = new URLSearchParams(location.search).get("client");
     const scope = ownerClient ? { client: ownerClient } : {};
+    let activeTab = null;
+
+    async function initOwnerPicker() {
+      let clients;
+      try {
+        clients = await api("/api/clients");
+      } catch (e) {
+        return; // обычный клиент — список недоступен, показываем свой кабинет
+      }
+      if (!clients.length) return;
+      const picker = $("client-picker");
+      picker.innerHTML = clients.map((c) =>
+        `<option value="${esc(c.name)}">${esc(c.name)}${c.linked ? "" : " · " + esc(t("not_linked"))}</option>`).join("");
+      if (!scope.client || !clients.some((c) => c.name === scope.client)) scope.client = clients[0].name;
+      picker.value = scope.client;
+      $("picker-card").hidden = false;
+      picker.addEventListener("change", () => {
+        scope.client = picker.value;
+        Object.keys(loaded).forEach((k) => delete loaded[k]); // перезагрузить вкладки для новой компании
+        loadTab(activeTab);
+      });
+    }
+
+    function loadTab(tab) {
+      activeTab = tab;
+      if (loaded[tab]) return;
+      loaded[tab] = true;
+      if (tab === "deliveries") loadDeliveries();
+      if (tab === "invoice") loadInvoice();
+    }
 
     async function loadDeliveries() {
       try {
@@ -132,12 +169,8 @@
       toast(t("sent_to_chat"));
     }));
 
-    App.initTabs((tab) => {
-      if (loaded[tab]) return;
-      loaded[tab] = true;
-      if (tab === "deliveries") loadDeliveries();
-      if (tab === "invoice") loadInvoice();
-    });
+    // Сначала узнаём, владелец ли это (и какую компанию показать), потом грузим вкладку
+    initOwnerPicker().finally(() => App.initTabs(loadTab));
   </script>
 </body>
 </html>

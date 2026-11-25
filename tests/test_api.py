@@ -189,3 +189,33 @@ async def test_client_invoice_and_isolation(client):
     # Попытка подставить чужой tg_id
     r = await client.get("/api/client/invoice", params={"tg_id": 999}, headers=auth_headers(CLIENT_ID))
     assert r.status_code == 403
+
+
+async def test_owner_in_client_role_can_preview_any_client(client, db):
+    """Владелец, переключившийся в роль «Клиент», выбирает компанию и видит её кабинет."""
+    async with db() as s:
+        s.add(User(telegram_id=OWNER_ID, role="client", language="ru"))
+        await s.commit()
+    h = auth_headers(OWNER_ID)
+
+    r = await client.get("/api/clients", headers=h)
+    assert r.status_code == 200
+    assert {c["name"] for c in r.json()} == {"FOYDALI FOOD GROUP", "NO NAMELA"}
+
+    r = await client.get("/api/client/invoice", params={"client": "NO NAMELA"}, headers=h)
+    assert r.status_code == 200 and r.json()["charged"] == 1_500_000
+
+    r = await client.get("/api/client/deliveries", params={"client": "FOYDALI FOOD GROUP"}, headers=h)
+    assert r.status_code == 200 and r.json()["total_portions"] == 100
+
+    # Без выбора компании (и без привязки) — 400, а не чужие данные
+    r = await client.get("/api/client/invoice", headers=h)
+    assert r.status_code == 400
+
+
+async def test_regular_client_cannot_list_or_pick_other_clients(client):
+    h = auth_headers(CLIENT_ID)
+    assert (await client.get("/api/clients", headers=h)).status_code == 403
+    # Параметр client игнорируется: обычный клиент всегда получает только свою компанию
+    r = await client.get("/api/client/invoice", params={"client": "NO NAMELA"}, headers=h)
+    assert r.status_code == 200 and r.json()["client"] == "FOYDALI FOOD GROUP"

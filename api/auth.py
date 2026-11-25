@@ -129,6 +129,11 @@ class AuthUser:
     def is_owner(self) -> bool:
         return self.role == "owner"
 
+    @property
+    def is_owner_account(self) -> bool:
+        """Аккаунт из OWNER_IDS — даже если сейчас для проверки выбрана другая роль."""
+        return self.telegram_id in get_settings().owner_ids
+
 
 def resolve_role(telegram_id: int, stored_role: str | None, settings: Settings) -> str | None:
     """

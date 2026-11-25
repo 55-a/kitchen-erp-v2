@@ -26,9 +26,13 @@ async def build_menu(session: AsyncSession, user: User) -> tuple[str, object | N
         return t(lang, "no_role"), role_keyboard(lang)
     if role == "client":
         client = await linked_client(session, user.telegram_id)
-        if client is None:
+        if client is None and user.telegram_id in get_settings().owner_ids:
+            # Владелец проверяет кабинет клиента: компанию выбирает в Mini App
+            text = t(lang, "welcome_client_owner")
+        elif client is None:
             return t(lang, "client_not_linked", tg_id=user.telegram_id), role_menu("none", lang)
-        text = t(lang, "welcome_client", client=html.escape(client.name))
+        else:
+            text = t(lang, "welcome_client", client=html.escape(client.name))
     else:
         text = t(lang, f"welcome_{role}")
     if not get_settings().webapp_url:
