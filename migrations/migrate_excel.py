@@ -6,15 +6,21 @@
     python -m migrations.migrate_excel "Учёт_кухни.xlsx" --dry-run  # только проверка, без записи
     python -m migrations.migrate_excel "Учёт_кухни.xlsx" --reset    # очистить и импортировать заново
 
-Листы:
-    "Цены продуктов"  → stock              (товар, единица, цена, [остаток])
-    "Себестоимость"   → recipes            (блюдо, выход)
-    "Состав закладок" → recipe_ingredients (блюдо, продукт, количество, единица)
-    "По дням"         → client_deliveries  (дата, клиент, блюдо, порции, сумма, себестоимость)
+Реальная структура файла:
+    Лист "По дням" — широкая таблица: слева дата, дальше блок колонок на каждого клиента
+        (Блюдо | Порций | Начислено | Оплата | Себестоимость), справа блок «ВСЕГО».
+        Над строкой заголовков — строка с названиями клиентов.
+        Строки «Сентябрь 2026», «Итого за …», «ИТОГО ЗА ВЕСЬ ПЕРИОД» пропускаются.
+        Строка «Предоплата» без даты — оплата до первого заказа (ставим дату первой поставки).
+        → client_deliveries (порции > 0) и payments (оплата > 0)
+    Лист "Себестоимость" — три таблицы одна под другой:
+        «Блюдо | Закладка на 100 порций | Себестоимость порции …»  → recipes
+        «Продукт | Примечание | Ед. | Цена»                        → stock (остаток 0)
+        «Блюдо | Продукт | Кол-во | Ед. | Цена | Сумма»            → recipe_ingredients
+    Лист "Итог" — контрольные суммы (порции, начислено, оплачено по каждому клиенту).
 
-Колонки ищутся по названиям заголовков (с синонимами), а не по буквам —
-скрипт не сломается, если в таблицу добавят столбец.
-После импорта сверяются контрольные суммы: 527 порций и ~15.8 млн сум выручки.
+Таблицы и колонки ищутся по тексту заголовков, а не по номерам строк и буквам,
+поэтому скрипт не сломается, если в файл добавят строки или столбцы.
 """
 from __future__ import annotations
 
@@ -30,42 +36,31 @@ from openpyxl import load_workbook
 from sqlalchemy import delete, func, select
 
 from api.database import init_db, session_scope
-from api.models import Batch, Client, ClientDelivery, Purchase, Recipe, RecipeIngredient, Stock
+from api.models import Batch, Client, ClientDelivery, Payment, Purchase, Recipe, RecipeIngredient, Stock
 from api.units import normalize_unit
 
 DEFAULT_CLIENTS = ["FOYDALI FOOD GROUP", "NO NAMELA"]
-EXPECTED_PORTIONS = 527
-EXPECTED_REVENUE = Decimal("15800000")
+DEFAULT_BASE_YIELD = Decimal("100")
+CENT = Decimal("0.01")
 
-# Синонимы заголовков (сравнение без регистра, по вхождению подстроки)
-HEADERS = {
-    "date": ["дата", "date", "kun", "sana"],
-    "client": ["клиент", "заказчик", "client", "mijoz", "покупатель"],
-    "dish": ["блюдо", "наименование блюда", "закладка", "dish", "рецепт", "taom"],
-    "product": ["продукт", "товар", "наименование", "ингредиент", "product", "mahsulot"],
-    "portions": ["порц", "кол-во порций", "portions", "porsiya"],
-    "amount": ["сумма", "выручка", "итого", "amount", "summa"],
-    "price": ["цена", "price", "narx", "стоимость за"],
-    "cost": ["себестоимость", "себест", "cost", "tannarx"],
-    "quantity": ["количество", "кол-во", "вес", "норма", "quantity", "miqdor", "брутто"],
-    "unit": ["ед", "единица", "unit", "o'lchov"],
-    "yield": ["выход", "порций в закладке", "yield", "chiqish"],
-    "stock_qty": ["остаток", "склад", "stock", "qoldiq"],
-}
-
-KEY_PRIORITY = [
-    "dish", "date", "client", "cost", "portions", "yield", "stock_qty",
-    "product", "amount", "price", "quantity", "unit",
-]
-
-SKIP_WORDS = ("итого", "всего", "total", "jami")
+SKIP_PREFIXES = ("итого", "всего", "total", "jami", "средняя")
 
 
 # ------------------------------------------------------------------ Разбор значений
 
+def clean(value) -> str:
+    return re.sub(r"\s+", " ", str(value if value is not None else "")).strip()
+
+
+def low(value) -> str:
+    return clean(value).lower()
+
+
 def to_decimal(value) -> Decimal | None:
-    """'1 250 000,50 сум' → Decimal('1250000.50')."""
+    """'1 250 000,50 сум' → Decimal('1250000.50'); '—' и пусто → None."""
     if value is None or value == "":
+        return None
+    if isinstance(value, bool):
         return None
     if isinstance(value, (int, float, Decimal)):
         return Decimal(str(value))
@@ -87,7 +82,7 @@ def to_date(value) -> dt.date | None:
     if isinstance(value, (int, float)) and 30000 < value < 80000:  # серийная дата Excel
         return dt.date(1899, 12, 30) + dt.timedelta(days=int(value))
     if isinstance(value, str):
-        for fmt in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d", "%d/%m/%Y"):
+        for fmt in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y"):
             try:
                 return dt.datetime.strptime(value.strip(), fmt).date()
             except ValueError:
@@ -95,192 +90,281 @@ def to_date(value) -> dt.date | None:
     return None
 
 
-def clean(value) -> str:
-    return re.sub(r"\s+", " ", str(value or "")).strip()
+def is_dash(text: str) -> bool:
+    return text in {"", "—", "-", "–"}
 
 
-def is_total_row(*values) -> bool:
-    return any(clean(v).lower().startswith(SKIP_WORDS) for v in values if v)
+def is_skip(text: str) -> bool:
+    return low(text).startswith(SKIP_PREFIXES)
 
 
-# ------------------------------------------------------------------ Поиск заголовков
-
-def find_header(ws, required: list[str], optional: list[str], scan_rows: int = 15) -> tuple[int, dict[str, int]]:
-    """
-    Ищет строку заголовков среди первых scan_rows строк.
-    Возвращает (номер строки, {ключ: индекс колонки}). Бросает ValueError, если не нашли.
-    """
-    # Более специфичные ключи сопоставляем первыми: "Наименование блюда" должно уйти в dish,
-    # а не в product; "Себестоимость" — в cost, а не в price; "Кол-во порций" — в portions.
-    keys = sorted(required + optional, key=lambda k: KEY_PRIORITY.index(k))
-    for row_idx, row in enumerate(ws.iter_rows(min_row=1, max_row=scan_rows, values_only=True), start=1):
-        cells = [clean(c).lower() for c in row]
-        mapping: dict[str, int] = {}
-        for key in keys:
-            for col, text in enumerate(cells):
-                if text and col not in mapping.values() and any(s in text for s in HEADERS[key]):
-                    mapping[key] = col
-                    break
-        if all(k in mapping for k in required):
-            return row_idx, mapping
-    raise ValueError(f"Лист «{ws.title}»: не найдены колонки {required}")
+def money(value: Decimal | None) -> Decimal:
+    return (value or Decimal("0")).quantize(CENT)
 
 
-def rows_after(ws, header_row: int, width: int = 64):
-    """Строки данных после заголовка, дополненные None до одинаковой длины
-    (в режиме read_only openpyxl отдаёт короткие кортежи для пустых хвостов)."""
-    for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
-        yield tuple(row) + (None,) * max(0, width - len(row))
+# ------------------------------------------------------------------ Работа с листами
+
+def load_rows(ws) -> list[list]:
+    """Все строки листа как списки одинаковой длины."""
+    rows = [list(r) for r in ws.iter_rows(values_only=True)]
+    width = max((len(r) for r in rows), default=0)
+    return [r + [None] * (width - len(r)) for r in rows]
 
 
-def get_sheet(wb, name: str):
+def get_sheet(wb, *names: str):
     """Лист по имени без учёта регистра и лишних пробелов."""
-    for ws in wb.worksheets:
-        if clean(ws.title).lower() == name.lower():
-            return ws
-    raise ValueError(f"Лист «{name}» не найден. Есть: {[ws.title for ws in wb.worksheets]}")
+    for name in names:
+        for ws in wb.worksheets:
+            if low(ws.title) == name.lower():
+                return ws
+    raise ValueError(f"Лист {names} не найден. Есть: {[ws.title for ws in wb.worksheets]}")
 
 
-# ------------------------------------------------------------------ Чтение листов
+def find_col(header: list, *variants: str, start: int = 0, stop: int | None = None) -> int | None:
+    """Индекс первой колонки, заголовок которой начинается с одного из вариантов."""
+    stop = len(header) if stop is None else stop
+    for idx in range(start, stop):
+        text = low(header[idx])
+        if text and any(text.startswith(v) for v in variants):
+            return idx
+    return None
 
-def read_products(wb) -> list[dict]:
-    ws = get_sheet(wb, "Цены продуктов")
-    header_row, cols = find_header(ws, ["product", "price"], ["unit", "stock_qty"])
-    items: dict[str, dict] = {}
-    for row in rows_after(ws, header_row):
-        name = clean(row[cols["product"]])
-        price = to_decimal(row[cols["price"]])
-        if not name or price is None or is_total_row(name):
+
+def find_header_row(rows: list[list], predicate, start: int = 0) -> int | None:
+    for idx in range(start, len(rows)):
+        if predicate([low(c) for c in rows[idx]]):
+            return idx
+    return None
+
+
+# ------------------------------------------------------------------ Лист "По дням"
+
+def read_daily(wb) -> tuple[list[dict], list[dict]]:
+    """Возвращает (поставки, оплаты)."""
+    rows = load_rows(get_sheet(wb, "По дням"))
+    h = find_header_row(rows, lambda c: "дата" in c and any(x.startswith("порц") for x in c))
+    if h is None or h == 0:
+        raise ValueError("Лист «По дням»: не найдена строка заголовков с «Дата» и «Порций»")
+    header, groups = rows[h], rows[h - 1]
+    date_col = find_col(header, "дата")
+
+    # Блоки клиентов: непустая ячейка в строке над заголовками начинает блок до следующей
+    starts = [i for i, v in enumerate(groups) if clean(v)]
+    blocks = []
+    for n, col in enumerate(starts):
+        name = clean(groups[col])
+        if low(name) in {"когда", "всего", "итого", "total"}:
             continue
-        unit = normalize_unit(clean(row[cols["unit"]])) if "unit" in cols else "kg"
-        qty = to_decimal(row[cols["stock_qty"]]) if "stock_qty" in cols else None
-        items[name.lower()] = {"name": name, "unit": unit or "kg", "price": price, "quantity": qty or Decimal("0")}
-    return list(items.values())
+        stop = starts[n + 1] if n + 1 < len(starts) else len(header)
+        block = {
+            "client": canonical_client(name),
+            "dish": find_col(header, "блюдо", start=col, stop=stop),
+            "portions": find_col(header, "порц", start=col, stop=stop),
+            "amount": find_col(header, "начислено", "сумма", "выручка", start=col, stop=stop),
+            "payment": find_col(header, "оплат", start=col, stop=stop),
+            "cost": find_col(header, "себестоимость", start=col, stop=stop),
+        }
+        if block["portions"] is None:
+            continue
+        blocks.append(block)
+    if not blocks:
+        raise ValueError("Лист «По дням»: не найдены блоки клиентов над строкой заголовков")
+    print("  Клиенты в «По дням»: " + ", ".join(b["client"] for b in blocks))
+
+    deliveries: list[dict] = []
+    payments: list[dict] = []
+    for row in rows[h + 1:]:
+        first = clean(row[0])
+        if is_skip(first):
+            continue
+        d = to_date(row[date_col])
+        for b in blocks:
+            def val(key):
+                return to_decimal(row[b[key]]) if b[key] is not None else None
+
+            dish = clean(row[b["dish"]]) if b["dish"] is not None else ""
+            portions = val("portions")
+            payment = val("payment")
+            if d is None:
+                # Только оплаты без даты («Предоплата»); строки-месяцы пропускаются
+                if payment and payment > 0:
+                    payments.append({"date": None, "client": b["client"], "amount": payment, "note": dish or first})
+                continue
+            if portions and portions > 0:
+                deliveries.append(
+                    {
+                        "date": d,
+                        "client": b["client"],
+                        "dish": dish if not is_dash(dish) else "—",
+                        "portions": int(portions),
+                        "amount": money(val("amount")),
+                        "cost": money(val("cost")),
+                    }
+                )
+            if payment and payment > 0:
+                payments.append({"date": d, "client": b["client"], "amount": payment, "note": dish})
+
+    # Предоплата без даты → дата первой поставки
+    first_date = min((x["date"] for x in deliveries), default=dt.date.today())
+    for p in payments:
+        if p["date"] is None:
+            p["date"] = first_date
+        p["amount"] = money(p["amount"])
+    return deliveries, payments
 
 
-def read_recipes(wb) -> tuple[dict[str, Decimal], dict[str, Decimal]]:
-    """
-    Возвращает (базовый выход по блюдам, себестоимость ОДНОЙ порции по блюдам).
-    Себестоимость нужна, если в листе "По дням" нет своей колонки себестоимости.
-    """
-    ws = get_sheet(wb, "Себестоимость")
-    header_row, cols = find_header(ws, ["dish"], ["yield", "cost"])
-    header_cells = [clean(c).lower() for c in next(ws.iter_rows(min_row=header_row, max_row=header_row, values_only=True))]
-    cost_is_per_portion = "cost" in cols and "порц" in header_cells[cols["cost"]]
+# ------------------------------------------------------------------ Лист "Себестоимость"
 
+def read_costing(wb) -> tuple[dict[str, Decimal], list[dict], list[dict]]:
+    """Возвращает (рецепты {блюдо: выход}, товары, состав закладок)."""
+    rows = load_rows(get_sheet(wb, "Себестоимость"))
+
+    # Выход закладки: строка «Порций в каждой закладке | 100» или «на 100 порций» в заголовке
+    base_yield = DEFAULT_BASE_YIELD
+    for row in rows[:10]:
+        if "порций в" in low(row[0]):
+            y = next((to_decimal(c) for c in row[1:] if to_decimal(c)), None)
+            if y and y > 0:
+                base_yield = y
+                break
+
+    # 1) Итог по блюдам
     recipes: dict[str, Decimal] = {}
-    unit_costs: dict[str, Decimal] = {}
-    for row in rows_after(ws, header_row):
-        name = clean(row[cols["dish"]])
-        if not name or is_total_row(name):
+    h = find_header_row(rows, lambda c: c[0] == "блюдо" and len(c) > 1 and not c[1].startswith("продукт"))
+    if h is not None:
+        m = re.search(r"на\s+(\d+)\s+порц", low(rows[h][1]))
+        if m:
+            base_yield = Decimal(m.group(1))
+        for row in rows[h + 1:]:
+            name = clean(row[0])
+            if not name:
+                break
+            if not is_skip(name):
+                recipes[name] = base_yield
+
+    # 2) Цены продуктов
+    products: dict[str, dict] = {}
+    h = find_header_row(rows, lambda c: c[0] == "продукт")
+    if h is None:
+        raise ValueError("Лист «Себестоимость»: не найдена таблица «Продукт | … | Ед. | Цена»")
+    header = rows[h]
+    unit_col = find_col(header, "ед")
+    price_col = find_col(header, "цена")
+    for row in rows[h + 1:]:
+        name = clean(row[0])
+        if not name:
+            break
+        price = to_decimal(row[price_col]) if price_col is not None else None
+        if price is None or is_skip(name):
             continue
-        y = to_decimal(row[cols["yield"]]) if "yield" in cols else None
-        base_yield = y if y and y > 0 else Decimal("1")
-        recipes[name] = base_yield
-        cost = to_decimal(row[cols["cost"]]) if "cost" in cols else None
-        if cost is not None:
-            unit_costs[name.lower()] = cost if cost_is_per_portion else cost / base_yield
-    return recipes, unit_costs
+        unit = normalize_unit(clean(row[unit_col])) if unit_col is not None else "kg"
+        products[name.lower()] = {"name": name, "unit": unit, "price": money(price)}
 
-
-def read_ingredients(wb) -> list[dict]:
-    """
-    Поддерживает два формата листа:
-    1) таблица с колонкой "Блюдо" в каждой строке;
-    2) блоки: строка с названием блюда, под ней строки ингредиентов.
-    """
-    ws = get_sheet(wb, "Состав закладок")
-    header_row, cols = find_header(ws, ["product", "quantity"], ["dish", "unit"])
-    rows: list[dict] = []
-    current_dish: str | None = None
-    for row in rows_after(ws, header_row):
-        product = clean(row[cols["product"]]) if cols["product"] < len(row) else ""
-        quantity = to_decimal(row[cols["quantity"]]) if cols["quantity"] < len(row) else None
-        dish = clean(row[cols["dish"]]) if "dish" in cols and cols["dish"] < len(row) else ""
-
-        if dish and not is_total_row(dish):
-            current_dish = dish
-        elif not dish and product and quantity is None and "dish" not in cols:
-            # Строка-заголовок блока: только название блюда
-            current_dish = product
+    # 3) Состав закладок
+    ingredients: list[dict] = []
+    h = find_header_row(rows, lambda c: c[0] == "блюдо" and len(c) > 1 and c[1].startswith("продукт"))
+    if h is None:
+        raise ValueError("Лист «Себестоимость»: не найдена таблица «Блюдо | Продукт | Кол-во | Ед.»")
+    header = rows[h]
+    qty_col = find_col(header, "кол", "количество")
+    unit_col = find_col(header, "ед")
+    for row in rows[h + 1:]:
+        dish, product = clean(row[0]), clean(row[1])
+        if not dish and not product:
+            break
+        qty = to_decimal(row[qty_col]) if qty_col is not None else None
+        if not dish or not product or not qty or qty <= 0 or is_skip(dish):
             continue
-        if product and quantity and quantity > 0 and current_dish and not is_total_row(product):
-            unit = normalize_unit(clean(row[cols["unit"]])) if "unit" in cols else "g"
-            rows.append({"dish": current_dish, "product": product, "quantity": quantity, "unit": unit})
-    # Отбрасываем строку самого заголовка, если она попала в выборку
-    return [r for r in rows if r["product"].lower() not in HEADERS["product"]]
+        unit = normalize_unit(clean(row[unit_col])) if unit_col is not None else "kg"
+        ingredients.append({"dish": dish, "product": product, "quantity": qty, "unit": unit})
+        recipes.setdefault(dish, base_yield)
+
+    return recipes, list(products.values()), ingredients
 
 
-def read_deliveries(wb) -> list[dict]:
-    ws = get_sheet(wb, "По дням")
-    header_row, cols = find_header(ws, ["date", "portions"], ["client", "dish", "amount", "price", "cost"])
-    rows: list[dict] = []
-    last_date: dt.date | None = None
-    for row in rows_after(ws, header_row):
-        d = to_date(row[cols["date"]]) or last_date  # объединённые ячейки даты
-        portions = to_decimal(row[cols["portions"]])
-        client = clean(row[cols["client"]]) if "client" in cols else ""
-        dish = clean(row[cols["dish"]]) if "dish" in cols else ""
-        if d is None or not portions or portions <= 0 or is_total_row(row[cols["date"]], client, dish):
-            continue
-        last_date = d
-        amount = to_decimal(row[cols["amount"]]) if "amount" in cols else None
-        if amount is None and "price" in cols:
-            price = to_decimal(row[cols["price"]])
-            amount = price * portions if price is not None else None
-        cost = to_decimal(row[cols["cost"]]) if "cost" in cols else None
-        rows.append(
-            {
-                "date": d,
-                "client": client or DEFAULT_CLIENTS[0],
-                "dish": dish or "—",
-                "portions": int(portions),
-                "amount": amount or Decimal("0"),
-                "cost": cost or Decimal("0"),
+# ------------------------------------------------------------------ Лист "Итог" (контроль)
+
+def read_expected(wb) -> dict[str, dict[str, Decimal]] | None:
+    """{'portions'|'amount'|'paid': {клиент или 'ВСЕГО': число}} из листа «Итог»."""
+    try:
+        rows = load_rows(get_sheet(wb, "Итог"))
+    except ValueError:
+        return None
+    h = find_header_row(rows, lambda c: c[0] == "показатель")
+    if h is None:
+        return None
+    names = [canonical_client(clean(c)) if clean(c) else "" for c in rows[h]]
+    keys = {"продано порций": "portions", "начислено": "amount", "оплачено": "paid"}
+    result: dict[str, dict[str, Decimal]] = {}
+    for row in rows[h + 1:]:
+        title = low(row[0])
+        if not title:
+            break
+        key = next((v for k, v in keys.items() if title.startswith(k)), None)
+        if key:
+            result[key] = {
+                ("ВСЕГО" if low(names[i]) == "всего" else names[i]): to_decimal(row[i]) or Decimal("0")
+                for i in range(1, len(row))
+                if names[i]
             }
-        )
-    return rows
+    return result or None
 
 
-# ------------------------------------------------------------------ Запись в БД
+# ------------------------------------------------------------------ Миграция
 
 def canonical_client(name: str) -> str:
     """Приводит написание клиента к эталонному (FOYDALI FOOD GROUP / NO NAMELA)."""
     key = re.sub(r"[^a-zа-я0-9]", "", name.lower())
     for ref in DEFAULT_CLIENTS:
-        # "Foydali Food Group LLC", "FOYDALI-FOOD GROUP" → FOYDALI FOOD GROUP
         if key and re.sub(r"[^a-z0-9]", "", ref.lower()) in key:
             return ref
     return name
 
 
+def fmt(n) -> str:
+    return f"{Decimal(n):,.0f}".replace(",", " ")
+
+
+def check_totals(deliveries: list[dict], payments: list[dict], expected) -> bool:
+    """Сверка с листом «Итог». True — всё сошлось."""
+    clients = sorted({d["client"] for d in deliveries} | {p["client"] for p in payments})
+    actual = {"portions": {}, "amount": {}, "paid": {}}
+    for c in clients:
+        actual["portions"][c] = Decimal(sum(d["portions"] for d in deliveries if d["client"] == c))
+        actual["amount"][c] = sum((d["amount"] for d in deliveries if d["client"] == c), Decimal("0"))
+        actual["paid"][c] = sum((p["amount"] for p in payments if p["client"] == c), Decimal("0"))
+    for key in actual:
+        actual[key]["ВСЕГО"] = sum(actual[key].values(), Decimal("0"))
+
+    labels = {"portions": "Порций", "amount": "Начислено, сум", "paid": "Оплачено, сум"}
+    for key, label in labels.items():
+        print(f"  {label}: " + ", ".join(f"{c} = {fmt(v)}" for c, v in actual[key].items()))
+
+    if not expected:
+        print("  ⚠️  Лист «Итог» не найден — сверка не выполнена")
+        return True
+    ok = True
+    for key, label in labels.items():
+        for who, exp in expected.get(key, {}).items():
+            got = actual[key].get(who, Decimal("0"))
+            if abs(got - exp) > Decimal("1"):
+                print(f"  ⚠️  {label} / {who}: в «Итог» {fmt(exp)}, посчитано {fmt(got)}")
+                ok = False
+    print("  ✅ Сверка с листом «Итог» сошлась" if ok else "  ❌ Есть расхождения с листом «Итог»")
+    return ok
+
+
 async def migrate(path: Path, reset: bool, dry_run: bool) -> int:
     print(f"📂 Читаю {path} …")
-    wb = load_workbook(path, data_only=True, read_only=True)  # data_only — значения формул, а не сами формулы
+    wb = load_workbook(path, data_only=True)  # data_only — значения формул, а не сами формулы
 
-    products = read_products(wb)
-    recipes, unit_costs = read_recipes(wb)
-    ingredients = read_ingredients(wb)
-    deliveries = read_deliveries(wb)
+    deliveries, payments = read_daily(wb)
+    recipes, products, ingredients = read_costing(wb)
+    expected = read_expected(wb)
 
-    # Себестоимость поставки не указана → порции × себестоимость порции из листа "Себестоимость"
-    for d in deliveries:
-        if not d["cost"] and d["dish"].lower() in unit_costs:
-            d["cost"] = (unit_costs[d["dish"].lower()] * d["portions"]).quantize(Decimal("0.01"))
-
-    total_portions = sum(d["portions"] for d in deliveries)
-    total_revenue = sum((d["amount"] for d in deliveries), Decimal("0"))
     print(f"  Товаров: {len(products)}, рецептов: {len(recipes)}, строк состава: {len(ingredients)}")
-    print(f"  Поставок: {len(deliveries)}, порций: {total_portions}, выручка: {total_revenue:,.0f} сум".replace(",", " "))
-
-    # Контрольные суммы из ТЗ
-    ok = True
-    if total_portions != EXPECTED_PORTIONS:
-        print(f"  ⚠️  Ожидалось {EXPECTED_PORTIONS} порций, получено {total_portions}")
-        ok = False
-    if abs(total_revenue - EXPECTED_REVENUE) > EXPECTED_REVENUE * Decimal("0.01"):
-        print(f"  ⚠️  Ожидалось ~{EXPECTED_REVENUE:,.0f} сум выручки".replace(",", " "))
-        ok = False
+    print(f"  Поставок: {len(deliveries)}, оплат: {len(payments)}")
+    ok = check_totals(deliveries, payments, expected)
 
     if dry_run:
         print("🔎 Dry-run: в базу ничего не записано.")
@@ -289,53 +373,48 @@ async def migrate(path: Path, reset: bool, dry_run: bool) -> int:
     await init_db()
     async with session_scope() as session:
         existing = (await session.execute(select(func.count()).select_from(ClientDelivery))).scalar_one()
+        existing += (await session.execute(select(func.count()).select_from(Payment))).scalar_one()
+        existing += (await session.execute(select(func.count()).select_from(Stock))).scalar_one()
         if existing and not reset:
-            print(f"❌ В базе уже есть {existing} поставок. Запустите с --reset, чтобы импортировать заново.")
+            print(f"❌ В базе уже есть данные ({existing} записей). Запустите с --reset, чтобы импортировать заново.")
             return 1
         if reset:
-            print("🧹 Очищаю таблицы…")
-            for model in (Batch, RecipeIngredient, Recipe, ClientDelivery, Purchase, Stock):
+            print("🧹 Очищаю таблицы (поставки, оплаты, склад, рецепты, закупки, партии)…")
+            for model in (Batch, RecipeIngredient, Recipe, ClientDelivery, Payment, Purchase, Stock):
                 await session.execute(delete(model))
 
-        # Клиенты (создаём эталонных + всех из листа "По дням"; существующие привязки Telegram сохраняются)
-        client_names = set(DEFAULT_CLIENTS)
-        for d in deliveries:
-            d["client"] = canonical_client(d["client"])
-            client_names.add(d["client"])
+        # Клиенты: существующие привязки Telegram сохраняются
+        client_names = set(DEFAULT_CLIENTS) | {d["client"] for d in deliveries} | {p["client"] for p in payments}
         known = set((await session.execute(select(Client.name))).scalars().all())
         for name in sorted(client_names - known):
             session.add(Client(name=name))
 
-        # Склад
+        # Склад (остатков в файле нет — 0, появятся после закупок)
         stock_by_name: dict[str, Stock] = {}
         for p in products:
-            s = Stock(name=p["name"], unit=p["unit"], quantity=p["quantity"], price_per_unit=p["price"])
+            s = Stock(name=p["name"], unit=p["unit"], quantity=Decimal("0"), price_per_unit=p["price"])
             session.add(s)
             stock_by_name[p["name"].lower()] = s
         await session.flush()
 
-        # Рецепты: из "Себестоимость" + блюда, встречающиеся только в "Состав закладок"
-        all_dishes = dict(recipes)
-        for ing in ingredients:
-            all_dishes.setdefault(ing["dish"], Decimal("1"))
+        # Рецепты
         recipe_by_name: dict[str, Recipe] = {}
-        for name, base_yield in all_dishes.items():
+        for name, base_yield in recipes.items():
             r = Recipe(name=name, base_yield=base_yield)
             session.add(r)
             recipe_by_name[name.lower()] = r
         await session.flush()
 
-        # Состав. Продукта нет в ценах → создаём с нулевой ценой, чтобы не потерять строку
-        missing_products = set()
+        # Состав. Продукта нет в ценах → создаём с ценой 0, чтобы не потерять строку
+        missing = set()
         for ing in ingredients:
             product = stock_by_name.get(ing["product"].lower())
             if product is None:
-                stock_unit = "kg" if ing["unit"] in {"g", "kg"} else ("l" if ing["unit"] in {"ml", "l"} else ing["unit"])
-                product = Stock(name=ing["product"], unit=stock_unit, quantity=Decimal("0"), price_per_unit=Decimal("0"))
+                product = Stock(name=ing["product"], unit=ing["unit"], quantity=Decimal("0"), price_per_unit=Decimal("0"))
                 session.add(product)
                 await session.flush()
                 stock_by_name[ing["product"].lower()] = product
-                missing_products.add(ing["product"])
+                missing.add(ing["product"])
             session.add(
                 RecipeIngredient(
                     recipe_id=recipe_by_name[ing["dish"].lower()].id,
@@ -344,10 +423,9 @@ async def migrate(path: Path, reset: bool, dry_run: bool) -> int:
                     unit=ing["unit"],
                 )
             )
-        if missing_products:
-            print(f"  ⚠️  Нет цены для {len(missing_products)} продуктов (созданы с ценой 0): {sorted(missing_products)[:10]}")
+        if missing:
+            print(f"  ⚠️  Нет цены для {len(missing)} продуктов (созданы с ценой 0): {sorted(missing)[:10]}")
 
-        # Поставки
         for d in deliveries:
             session.add(
                 ClientDelivery(
@@ -355,8 +433,10 @@ async def migrate(path: Path, reset: bool, dry_run: bool) -> int:
                     amount=d["amount"], cost=d["cost"], date=d["date"],
                 )
             )
+        for p in payments:
+            session.add(Payment(client_name=p["client"], amount=p["amount"], payment_type="cash", date=p["date"]))
 
-    print("✅ Импорт завершён" + ("" if ok else " (с расхождениями контрольных сумм — проверьте файл)"))
+    print("✅ Импорт завершён" + ("" if ok else " (с расхождениями — проверьте файл)"))
     return 0 if ok else 2
 
 
