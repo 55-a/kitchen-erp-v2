@@ -36,7 +36,7 @@ class Settings:
     database_url: str = "sqlite+aiosqlite:///./kitchen.db"
     # Ключ и модель Google Gemini
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash"
     # Лимит запросов к Gemini в минуту (бесплатный тариф — 15)
     gemini_rpm: int = 15
     # Telegram ID владельцев (только они получают роль "owner")
@@ -71,7 +71,7 @@ def get_settings() -> Settings:
         webapp_url=os.getenv("WEBAPP_URL", "").rstrip("/"),
         database_url=os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./kitchen.db"),
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash"),
         gemini_rpm=int(os.getenv("GEMINI_RPM", "15")),
         owner_ids=_int_set(os.getenv("OWNER_IDS", "")),
         staff_ids=_int_set(os.getenv("STAFF_IDS", "")),

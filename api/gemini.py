@@ -25,6 +25,19 @@ log = logging.getLogger(__name__)
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
+# Запасные модели, если основная выведена из обращения или перегружена
+FALLBACK_MODELS = ("gemini-3.5-flash", "gemini-flash-latest", "gemini-3.8-flash", "gemini-3.1-flash-lite")
+
+
+def _model_chain(configured: str) -> list[str]:
+    """GEMINI_MODEL (через запятую) + запасные, без повторов."""
+    chain: list[str] = []
+    for name in [*configured.split(","), *FALLBACK_MODELS]:
+        name = name.strip().removeprefix("models/")
+        if name and name not in chain:
+            chain.append(name)
+    return chain
+
 PROMPT = (
     "Распознай чек и верни JSON массив: [{name, quantity, unit, total_price}]. "
     "name — название товара как в чеке (строка), quantity — количество (число), "
@@ -135,21 +148,34 @@ async def parse_receipt(image_bytes: bytes, mime_type: str = "image/jpeg") -> li
         ],
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
     }
-    url = GEMINI_URL.format(model=settings.gemini_model)
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
-            resp = await client.post(url, json=payload, headers={"x-goog-api-key": settings.gemini_api_key})
-    except httpx.HTTPError as exc:
-        log.warning("Gemini network error: %s", exc)
-        raise GeminiUnavailable(str(exc)) from exc
-
-    if resp.status_code == 429 or resp.status_code >= 500:
-        log.warning("Gemini unavailable: %s %s", resp.status_code, resp.text[:300])
-        raise GeminiUnavailable(f"HTTP {resp.status_code}")
-    if resp.status_code != 200:
-        # 400/403 — неверный ключ или запрос; для клиента это тоже "сервис недоступен"
-        log.error("Gemini error: %s %s", resp.status_code, resp.text[:500])
-        raise GeminiUnavailable(f"HTTP {resp.status_code}")
+    # Google регулярно выводит старые модели из обращения (404) и отвечает 503 при перегрузке
+    # новых. Поэтому пробуем по очереди: GEMINI_MODEL (можно несколько через запятую),
+    # затем запасные модели. Неверный ключ (400/401/403) — сразу ошибка, перебор не поможет.
+    models = _model_chain(settings.gemini_model)
+    resp = None
+    last_error = "no models"
+    async with httpx.AsyncClient(timeout=httpx.Timeout(40.0, connect=10.0)) as client:
+        for model in models:
+            try:
+                resp = await client.post(
+                    GEMINI_URL.format(model=model), json=payload, headers={"x-goog-api-key": settings.gemini_api_key}
+                )
+            except httpx.HTTPError as exc:
+                log.warning("Gemini %s network error: %s", model, exc)
+                last_error, resp = str(exc), None
+                continue
+            if resp.status_code == 200:
+                log.info("Gemini %s: receipt recognized", model)
+                break
+            if resp.status_code in {404, 429} or resp.status_code >= 500:
+                log.warning("Gemini %s unavailable: %s %s", model, resp.status_code, resp.text[:300])
+                last_error, resp = f"HTTP {resp.status_code}", None
+                continue
+            # 400/401/403 — неверный ключ или запрос; для клиента это тоже "сервис недоступен"
+            log.error("Gemini %s error: %s %s", model, resp.status_code, resp.text[:500])
+            raise GeminiUnavailable(f"HTTP {resp.status_code}")
+    if resp is None:
+        raise GeminiUnavailable(last_error)
 
     try:
         data = resp.json()
