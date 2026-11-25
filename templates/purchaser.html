@@ -34,7 +34,18 @@
     <div class="tabs">
       <button type="button" data-tab="manual" data-i18n="tab_manual"></button>
       <button type="button" data-tab="photo" data-i18n="tab_photo"></button>
+      <button type="button" data-tab="ai" data-i18n="tab_ai"></button>
     </div>
+
+    <!-- ===== ИИ-помощник: свободный чат ===== -->
+    <section data-panel="ai" hidden class="card chat-card">
+      <div class="chat-log" id="chat-log" aria-live="polite"></div>
+      <div class="chips" id="chat-suggestions"></div>
+      <form class="chat-input" id="chat-form" autocomplete="off">
+        <textarea id="chat-text" rows="1" maxlength="2000" data-i18n-placeholder="chat_placeholder"></textarea>
+        <button type="submit" class="send-btn" id="chat-send" aria-label="Send">➤</button>
+      </form>
+    </section>
 
     <!-- ===== Ручной ввод ===== -->
     <section data-panel="manual" hidden>
@@ -351,6 +362,79 @@
     }
     $("save-receipt").addEventListener("click", saveReceipt);
 
+    // ---------- ИИ-помощник: свободный чат ----------
+    // История хранится в sessionStorage (на время открытия приложения) и целиком уходит на сервер:
+    // так ИИ помнит контекст разговора. Сервер добавляет актуальные склад, рецепты и закупки.
+    const CHAT_KEY = "kx_ai_chat";
+    let chatHistory = [];
+    try { chatHistory = JSON.parse(sessionStorage.getItem(CHAT_KEY) || "[]"); } catch (e) { chatHistory = []; }
+    let chatBusy = false;
+
+    /** Безопасный вывод ответа ИИ: экранируем HTML, затем **жирный** → <b> */
+    function richText(s) {
+      return esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/^#+\s*/gm, "");
+    }
+
+    function renderChat(typing = false) {
+      const log = $("chat-log");
+      const hello = `
+        <div class="ai-hello">
+          <div class="ai-avatar">🤖</div>
+          <h3>${esc(t("ai_hello_title"))}</h3>
+          <div class="small">${esc(t("ai_hello_text"))}</div>
+        </div>`;
+      log.innerHTML = (chatHistory.length ? "" : hello) + chatHistory.map((m) => `
+        <div class="bubble ${m.role === "user" ? "user" : "ai"} ${m.error ? "error" : ""}">${m.role === "user" ? esc(m.text) : `<span class="who">🤖 ${esc(t("ai_name"))}</span>${richText(m.text)}`}</div>`).join("")
+        + (typing ? `<div class="bubble ai"><span class="typing"><i></i><i></i><i></i></span></div>` : "");
+      log.scrollTop = log.scrollHeight;
+      $("chat-suggestions").hidden = chatHistory.length > 0;
+    }
+
+    function renderSuggestions() {
+      $("chat-suggestions").innerHTML = ["ai_q1", "ai_q2", "ai_q3", "ai_q4"].map((k) =>
+        `<button type="button" class="chip" data-q="${esc(t(k))}">${esc(t(k))}</button>`).join("");
+    }
+
+    async function sendChat(text) {
+      text = text.trim();
+      if (!text || chatBusy) return;
+      chatBusy = true;
+      $("chat-send").disabled = true;
+      chatHistory.push({ role: "user", text });
+      $("chat-text").value = ""; autoGrow();
+      renderChat(true);
+      try {
+        // Ошибки (503 — ИИ недоступен, 429 — лимит) не попадают в историю, которую видит модель
+        const payload = chatHistory.filter((m) => !m.error).slice(-16).map(({ role, text }) => ({ role, text }));
+        const res = await api("/api/ai/chat", { json: { messages: payload } });
+        chatHistory.push({ role: "assistant", text: res.answer });
+      } catch (e) {
+        chatHistory.push({ role: "assistant", text: errorText(e), error: true });
+      } finally {
+        chatBusy = false;
+        $("chat-send").disabled = false;
+        sessionStorage.setItem(CHAT_KEY, JSON.stringify(chatHistory.slice(-40)));
+        renderChat();
+      }
+    }
+
+    function autoGrow() {
+      const ta = $("chat-text");
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
+    }
+
+    $("chat-form").addEventListener("submit", (ev) => { ev.preventDefault(); sendChat($("chat-text").value); });
+    $("chat-text").addEventListener("input", autoGrow);
+    $("chat-text").addEventListener("keydown", (ev) => {
+      // Enter — отправить, Shift+Enter — новая строка (на телефоне Enter просто переносит строку)
+      if (ev.key === "Enter" && !ev.shiftKey && !("ontouchstart" in window)) { ev.preventDefault(); sendChat($("chat-text").value); }
+    });
+    $("chat-suggestions").addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-q]");
+      if (b) sendChat(b.dataset.q);
+    });
+
     // ---------- Главная кнопка Telegram / своя кнопка ----------
     function updateMainButton() {
       if (!mb) {
@@ -359,16 +443,22 @@
         return;
       }
       if (activeTab === "manual") { mb.setText("💾 " + t("save_purchase")); mb.show(); }
-      else if (aiItems.length) { mb.setText("💾 " + t("save_selected", { n: selectedItems().length })); mb.show(); }
-      else mb.hide();
+      else if (activeTab === "photo" && aiItems.length) { mb.setText("💾 " + t("save_selected", { n: selectedItems().length })); mb.show(); }
+      else mb.hide();                            // в чате с ИИ главная кнопка не нужна
     }
 
-    if (mb) mb.onClick(() => (activeTab === "manual" ? saveManual() : saveReceipt()));
+    if (mb) mb.onClick(() => (activeTab === "manual" ? saveManual() : activeTab === "photo" ? saveReceipt() : null));
 
     // ---------- Запуск ----------
     $("date").value = App.today();
     updateManualTotal();
-    App.initTabs((tab) => { activeTab = tab === "photo" ? "photo" : "manual"; updateMainButton(); });
+    renderSuggestions();
+    renderChat();
+    App.initTabs((tab) => {
+      activeTab = ["photo", "ai"].includes(tab) ? tab : "manual";
+      updateMainButton();
+      if (tab === "ai") setTimeout(() => { $("chat-log").scrollTop = $("chat-log").scrollHeight; }, 50);
+    });
     loadStock();
     loadRecent();
   </script>

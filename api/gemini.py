@@ -148,14 +148,28 @@ async def parse_receipt(image_bytes: bytes, mime_type: str = "image/jpeg") -> li
         ],
         "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
     }
-    # Google регулярно выводит старые модели из обращения (404) и отвечает 503 при перегрузке
-    # новых. Поэтому пробуем по очереди: GEMINI_MODEL (можно несколько через запятую),
-    # затем запасные модели. Неверный ключ (400/401/403) — сразу ошибка, перебор не поможет.
-    models = _model_chain(settings.gemini_model)
+    text = await _generate(payload, purpose="receipt")
+
+    # На всякий случай убираем ```json ... ``` если модель их добавила
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+    try:
+        return normalize_items(json.loads(text))
+    except json.JSONDecodeError as exc:
+        raise ReceiptParseError("invalid JSON from Gemini") from exc
+
+
+async def _generate(payload: dict, purpose: str) -> str:
+    """
+    Отправляет запрос в Gemini и возвращает текст ответа.
+    Google регулярно выводит старые модели из обращения (404) и отвечает 503 при перегрузке
+    новых. Поэтому пробуем по очереди: GEMINI_MODEL (можно несколько через запятую),
+    затем запасные модели. Неверный ключ (400/401/403) — сразу ошибка, перебор не поможет.
+    """
+    settings = get_settings()
     resp = None
     last_error = "no models"
     async with httpx.AsyncClient(timeout=httpx.Timeout(40.0, connect=10.0)) as client:
-        for model in models:
+        for model in _model_chain(settings.gemini_model):
             try:
                 resp = await client.post(
                     GEMINI_URL.format(model=model), json=payload, headers={"x-goog-api-key": settings.gemini_api_key}
@@ -165,27 +179,52 @@ async def parse_receipt(image_bytes: bytes, mime_type: str = "image/jpeg") -> li
                 last_error, resp = str(exc), None
                 continue
             if resp.status_code == 200:
-                log.info("Gemini %s: receipt recognized", model)
+                log.info("Gemini %s: %s ok", model, purpose)
                 break
             if resp.status_code in {404, 429} or resp.status_code >= 500:
                 log.warning("Gemini %s unavailable: %s %s", model, resp.status_code, resp.text[:300])
                 last_error, resp = f"HTTP {resp.status_code}", None
                 continue
-            # 400/401/403 — неверный ключ или запрос; для клиента это тоже "сервис недоступен"
             log.error("Gemini %s error: %s %s", model, resp.status_code, resp.text[:500])
             raise GeminiUnavailable(f"HTTP {resp.status_code}")
     if resp is None:
         raise GeminiUnavailable(last_error)
-
     try:
         data = resp.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-    except (ValueError, KeyError, IndexError) as exc:
-        raise ReceiptParseError("unexpected Gemini response") from exc
+        parts = data["candidates"][0]["content"]["parts"]
+        # У «думающих» моделей бывает несколько частей; служебные (thought) пропускаем
+        return "".join(p.get("text", "") for p in parts if not p.get("thought"))
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise ReceiptParseError(f"unexpected Gemini response ({purpose})") from exc
 
-    # На всякий случай убираем ```json ... ``` если модель их добавила
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
-    try:
-        return normalize_items(json.loads(text))
-    except json.JSONDecodeError as exc:
-        raise ReceiptParseError("invalid JSON from Gemini") from exc
+
+# ---------------------------------------------------------------- ИИ-помощник закупщика
+
+CHAT_MAX_TURNS = 16          # сколько последних сообщений диалога отправляем модели
+CHAT_MAX_CHARS = 2000        # максимальная длина одного сообщения пользователя
+
+
+async def chat(history: list[dict], system: str) -> str:
+    """
+    Свободный диалог с ИИ-помощником.
+    history — [{role: "user"|"assistant", text: "..."}], последнее сообщение — от пользователя.
+    system  — инструкция с контекстом (склад, цены, последние закупки).
+    """
+    settings = get_settings()
+    if not settings.gemini_api_key:
+        raise GeminiUnavailable("GEMINI_API_KEY is not set")
+    await _limiter.acquire(settings.gemini_rpm)
+
+    contents = [
+        {"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["text"][:CHAT_MAX_CHARS]}]}
+        for m in history[-CHAT_MAX_TURNS:]
+    ]
+    payload = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": contents,
+        "generationConfig": {"temperature": 0.6, "maxOutputTokens": 8192},   # с запасом: «думающие» модели тратят часть лимита на размышления
+    }
+    text = (await _generate(payload, purpose="chat")).strip()
+    if not text:
+        raise ReceiptParseError("empty chat answer")
+    return text

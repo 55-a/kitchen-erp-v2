@@ -298,6 +298,76 @@
     return new Date(y, m - 1, 1).toLocaleDateString(numberLocale(), { month: "short", year: "2-digit" });
   }
 
+  // ---------- Язык и поддержка: кнопки в правом верхнем углу каждого экрана ----------
+  const LANGS = [
+    { code: "uz", flag: "🇺🇿", name: "O'zbekcha" },
+    { code: "ru", flag: "🇷🇺", name: "Русский" },
+    { code: "en", flag: "🇬🇧", name: "English" },
+    { code: "zh", flag: "🇨🇳", name: "中文" },
+  ];
+  let supportUrl = null;
+
+  /** Окно выбора языка. Язык сохраняется в профиле — на нём же бот и PDF-акт */
+  function openLanguagePicker() {
+    const body = document.createElement("div");
+    body.className = "lang-list";
+    body.innerHTML = LANGS.map((l) => `
+      <button type="button" class="lang-option ${l.code === I18N.lang ? "active" : ""}" data-lang="${l.code}">
+        <span class="flag">${l.flag}</span><span class="grow">${esc(l.name)}</span><span class="check">✓</span>
+      </button>`).join("");
+    const m = modal({ title: "🌐 " + I18N.t("language"), body });
+    body.addEventListener("click", async (ev) => {
+      const b = ev.target.closest("[data-lang]");
+      if (!b) return;
+      const code = b.dataset.lang;
+      body.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+      b.innerHTML += `<span class="spinner" style="width:18px;height:18px"></span>`;
+      if (tg && tg.initData) {
+        try { await api("/api/me/language", { json: { language: code } }); } catch (e) { /* язык всё равно сменим в приложении */ }
+      }
+      // Перезагружаем страницу с ?lang= — так переведутся и тексты, сформированные скриптом
+      const url = new URL(location.href);
+      url.searchParams.set("lang", code);
+      m.close();
+      location.replace(url.toString());
+    });
+  }
+
+  /** Окно поддержки: пишем ответственному в Telegram */
+  function openSupport() {
+    if (!supportUrl) return;
+    modal({
+      title: "💬 " + I18N.t("support"),
+      body: `<div class="confirm-icon">🛟</div><div class="confirm-text" style="text-align:center">${esc(I18N.t("support_text"))}</div>`,
+      actions: [
+        { label: I18N.t("cancel"), kind: "secondary" },
+        { label: "✈️ " + I18N.t("support_write"), onClick: () => {
+          if (tg && tg.openTelegramLink) tg.openTelegramLink(supportUrl); else window.open(supportUrl, "_blank");
+        } },
+      ],
+    });
+  }
+
+  function mountTopTools() {
+    const app = document.querySelector(".app");
+    if (!app || document.querySelector(".top-tools")) return;
+    const current = LANGS.find((l) => l.code === I18N.lang) || LANGS[1];
+    const bar = document.createElement("div");
+    bar.className = "top-tools";
+    bar.innerHTML = `
+      <span class="brand">Kuxnya <b>NVGR</b> ✦</span>
+      <button type="button" class="tool-btn" data-tool="support" hidden>💬 <span>${esc(I18N.t("support"))}</span></button>
+      <button type="button" class="tool-btn" data-tool="lang" aria-label="${esc(I18N.t("language"))}">${current.flag} <span>${current.code.toUpperCase()}</span></button>`;
+    app.prepend(bar);
+    bar.querySelector('[data-tool="lang"]').addEventListener("click", openLanguagePicker);
+    bar.querySelector('[data-tool="support"]').addEventListener("click", openSupport);
+    // Контакт поддержки задаётся на сервере (SUPPORT_TELEGRAM); нет контакта или нет доступа — кнопки нет
+    api("/api/me").then((me) => {
+      supportUrl = me.support_url;
+      bar.querySelector('[data-tool="support"]').hidden = !supportUrl;
+    }).catch(() => {});
+  }
+
   /** Общая инициализация страницы */
   function init() {
     if (tg) {
@@ -307,6 +377,7 @@
       try { tg.setHeaderColor("#0f172a"); tg.setBackgroundColor("#0f172a"); } catch (e) { /* старый клиент */ }
     }
     I18N.apply();
+    mountTopTools();
     if (!tg || !tg.initData) {
       const banner = document.createElement("div");
       banner.className = "banner";

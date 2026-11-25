@@ -1,10 +1,11 @@
 """
-Генерация PDF акта сверки через fpdf2.
+Генерация PDF акта сверки через fpdf2 — в современном стиле:
+градиентная шапка, карточки итогов, «вайб-строка» о балансе, полосатая таблица.
 
 Шрифты:
-- DejaVuSans (+Bold) — латиница, кириллица, узбекский;
-- NotoSansCJK — китайский (подключается как запасной шрифт, fallback).
-В Docker-образе они ставятся пакетами fonts-dejavu-core и fonts-noto-cjk.
+- DejaVuSans (+Bold) — латиница, кириллица, узбекский, символы ✦ ✓ ★ ♥;
+- WenQuanYi Micro Hei — китайский (подключается как запасной шрифт, fallback).
+В Docker-образе они ставятся пакетами fonts-dejavu-core и fonts-wqy-microhei.
 Можно положить свои файлы в каталог FONT_DIR.
 """
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
+from fpdf.fonts import FontFace
 
 from api.config import get_settings
 from bot.translations import t
@@ -24,14 +26,27 @@ log = logging.getLogger(__name__)
 
 _DEJAVU_REGULAR = ["DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
 _DEJAVU_BOLD = ["DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+# Китайский шрифт ОБЯЗАТЕЛЬНО с TrueType-контурами (glyf). Noto CJK (OTF/TTC с CFF-контурами)
+# fpdf2 2.8 встраивает неверно — в PDF вместо иероглифов видны цифры. Поэтому WenQuanYi Micro Hei.
 _CJK = [
-    "NotoSansSC-Regular.ttf",
-    "NotoSansSC-Regular.otf",
-    "NotoSansCJKsc-Regular.otf",
-    "NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    "wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "NotoSansSC-Regular.ttf",            # TTF-версия с Google Fonts тоже подходит
 ]
+
+# ---------- Палитра акта ----------
+INK = (15, 23, 42)          # почти чёрный текст
+MUTED = (100, 116, 139)     # серый для подписей
+VIOLET = (99, 102, 241)
+PURPLE = (139, 92, 246)
+PINK = (236, 72, 153)
+MINT = (16, 185, 129)
+RED = (225, 29, 72)
+LILAC_BG = (238, 242, 255)
+MINT_BG = (236, 253, 245)
+PINK_BG = (253, 242, 248)
+ZEBRA = (245, 243, 255)
+WHITE = (255, 255, 255)
 
 
 def _find_font(candidates: list[str]) -> Path | None:
@@ -61,13 +76,26 @@ def fmt_money(value) -> str:
     return f"{sign}{grouped}" + (f",{frac}" if frac != "00" else "")
 
 
+def _mix(c1: tuple, c2: tuple, k: float) -> tuple:
+    """Цвет между c1 и c2 (k от 0 до 1)."""
+    return tuple(round(a + (b - a) * k) for a, b in zip(c1, c2))
+
+
+def gradient_band(pdf: FPDF, x: float, y: float, w: float, h: float, c1: tuple, c2: tuple, steps: int = 140) -> None:
+    """Горизонтальный градиент тонкими полосками — отображается одинаково в любом просмотрщике PDF."""
+    step = w / steps
+    for i in range(steps):
+        pdf.set_fill_color(*_mix(c1, c2, i / max(steps - 1, 1)))
+        pdf.rect(x + i * step, y, step + 0.25, h, style="F")
+
+
 class ActPDF(FPDF):
-    """PDF с подключёнными юникод-шрифтами и нумерацией страниц."""
+    """PDF с юникод-шрифтами, тонкой градиентной полосой на страницах 2+ и нумерацией."""
 
     def __init__(self, lang: str):
         super().__init__(orientation="P", unit="mm", format="A4")
         self.lang = lang
-        self.set_margins(15, 15, 15)
+        self.set_margins(14, 14, 14)
         self.set_auto_page_break(auto=True, margin=18)
         self._setup_fonts()
 
@@ -81,28 +109,42 @@ class ActPDF(FPDF):
 
         cjk = _find_font(_CJK)
         if cjk is None:
-            log.warning("Шрифт NotoSansCJK не найден — китайские символы не будут отображаться")
+            log.warning("Китайский шрифт (wqy-microhei) не найден — иероглифы не будут отображаться")
             return
         try:
-            if cjk.suffix.lower() == ".ttc":
-                # .ttc — коллекция шрифтов; индекс 2 в NotoSansCJK-Regular.ttc — упрощённый китайский (SC)
-                try:
-                    self.add_font("notocjk", "", str(cjk), collection_font_number=2)
-                except TypeError:  # старый fpdf2 без поддержки коллекций
-                    self.add_font("notocjk", "", str(cjk))
-            else:
-                self.add_font("notocjk", "", str(cjk))
-            # Символы, которых нет в DejaVu (иероглифы), берутся из Noto CJK
-            self.set_fallback_fonts(["notocjk"], exact_match=False)
+            # В wqy-microhei.ttc первый шрифт коллекции — Micro Hei, он и нужен
+            self.add_font("cjk", "", str(cjk))
+            # Символы, которых нет в DejaVu (иероглифы), берутся из китайского шрифта
+            self.set_fallback_fonts(["cjk"], exact_match=False)
         except Exception as exc:  # шрифт битый/не поддерживается — PDF всё равно создаём
             log.warning("Не удалось подключить CJK-шрифт %s: %s", cjk, exc)
 
+    def header(self) -> None:
+        # На второй и следующих страницах — тонкая градиентная полоска вместо большой шапки
+        if self.page_no() > 1:
+            gradient_band(self, 0, 0, self.w, 4, VIOLET, PINK)
+            self.set_y(12)
+
     def footer(self) -> None:
-        self.set_y(-12)
+        self.set_y(-13)
         self.set_font("dejavu", "", 8)
-        self.set_text_color(130)
-        self.cell(0, 6, f"{t(self.lang, 'pdf_company')} · {self.page_no()}/{{nb}}", align="C")
-        self.set_text_color(0)
+        self.set_text_color(*MUTED)
+        self.cell(0, 6, f"{t(self.lang, 'pdf_company')} ✦ {t(self.lang, 'pdf_footer')} · {self.page_no()}/{{nb}}", align="C")
+        self.set_text_color(*INK)
+
+
+def _pill(pdf: FPDF, x: float, y: float, text: str, *, fill: tuple, color: tuple,
+          size: float = 8.5, opacity: float = 1.0) -> float:
+    """Округлая «таблетка» с текстом; возвращает её ширину."""
+    pdf.set_font("dejavu", "B", size)
+    w = pdf.get_string_width(text) + 8
+    with pdf.local_context(fill_opacity=opacity):
+        pdf.set_fill_color(*fill)
+        pdf.rect(x, y, w, 7, style="F", round_corners=True, corner_radius=3.5)
+    pdf.set_text_color(*color)
+    pdf.set_xy(x, y)
+    pdf.cell(w, 7, text, align="C")
+    return w
 
 
 def build_act_pdf(
@@ -122,94 +164,172 @@ def build_act_pdf(
     pdf = ActPDF(lang)
     pdf.alias_nb_pages()
     pdf.add_page()
+    content_w = pdf.w - pdf.l_margin - pdf.r_margin
 
-    # ---- Шапка
-    pdf.set_font("dejavu", "B", 16)
-    pdf.cell(0, 9, t(lang, "pdf_company"), new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-    pdf.set_font("dejavu", "B", 12)
-    pdf.multi_cell(0, 7, t(lang, "pdf_title"), new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
-    pdf.ln(4)
-
-    # ---- Период
+    # ---------- Период ----------
     dates = sorted(d.date for d in deliveries)
     start = date_from or (dates[0] if dates else None)
     end = date_to or (dates[-1] if dates else None)
     period = f"{start:%d.%m.%Y} — {end:%d.%m.%Y}" if start and end else t(lang, "pdf_all_time")
 
-    pdf.set_font("dejavu", "", 10)
-    for label, value in (
-        (t(lang, "pdf_client"), client_name),
-        (t(lang, "pdf_period"), period),
-        (t(lang, "pdf_generated"), dt.date.today().strftime("%d.%m.%Y")),
-    ):
-        pdf.set_font("dejavu", "B", 10)
-        pdf.cell(40, 6, f"{label}:")
-        pdf.set_font("dejavu", "", 10)
-        pdf.cell(0, 6, str(value), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(4)
+    # ---------- Шапка: градиент фиолетовый → розовый + декоративные круги ----------
+    band_h = 62
+    gradient_band(pdf, 0, 0, pdf.w, band_h, VIOLET, PINK)
+    with pdf.local_context(fill_opacity=0.12):
+        pdf.set_fill_color(*WHITE)
+        pdf.circle(x=pdf.w - 18, y=6, radius=34, style="F")
+        pdf.circle(x=pdf.w - 58, y=band_h - 4, radius=14, style="F")
 
-    # ---- Таблица поставок (заголовок повторяется на каждой странице)
+    _pill(pdf, pdf.l_margin, 12, f"{t(lang, 'pdf_company').upper()} ✦", fill=WHITE, color=WHITE, opacity=0.22)
+
+    pdf.set_text_color(*WHITE)
+    pdf.set_font("dejavu", "B", 30)
+    pdf.set_xy(pdf.l_margin, 22)
+    pdf.cell(content_w, 13, t(lang, "pdf_hero"))
+    pdf.set_font("dejavu", "", 12)
+    pdf.set_xy(pdf.l_margin, 36)
+    pdf.cell(content_w, 7, f"{t(lang, 'pdf_company')}  ×  {client_name}")
+
+    x = pdf.l_margin
+    x += _pill(pdf, x, 47, f"{t(lang, 'pdf_period')}: {period}", fill=WHITE, color=WHITE, opacity=0.22) + 3
+    _pill(pdf, x, 47, f"{t(lang, 'pdf_generated')}: {dt.date.today():%d.%m.%Y}", fill=WHITE, color=WHITE, opacity=0.22)
+
+    # ---------- Три карточки: начислено / оплачено / долг или переплата ----------
+    charged = Decimal(str(invoice.get("charged", 0) or 0))
+    paid = Decimal(str(invoice.get("paid", 0) or 0))
+    debt = Decimal(str(invoice.get("debt", 0) or 0))
+    if debt > 0:
+        third = (t(lang, "pdf_debt"), debt, PINK_BG, RED)
+    elif debt < 0:
+        third = (t(lang, "pdf_overpaid"), -debt, MINT_BG, MINT)
+    else:
+        third = (t(lang, "pdf_debt"), Decimal("0"), MINT_BG, MINT)
+    cards = (
+        (t(lang, "pdf_total"), charged, LILAC_BG, VIOLET),
+        (t(lang, "pdf_paid"), paid, MINT_BG, MINT),
+        third,
+    )
+    gap = 5
+    card_w = (content_w - gap * 2) / 3
+    card_y = band_h + 8
+    for i, (label, value, bg, accent) in enumerate(cards):
+        cx = pdf.l_margin + i * (card_w + gap)
+        pdf.set_fill_color(*bg)
+        pdf.rect(cx, card_y, card_w, 31, style="F", round_corners=True, corner_radius=5)
+        pdf.set_fill_color(*accent)                       # цветная точка-акцент
+        pdf.rect(cx + 6, card_y + 6.5, 3, 3, style="F", round_corners=True, corner_radius=1.5)
+        pdf.set_text_color(*MUTED)
+        pdf.set_font("dejavu", "B", 7.5)
+        pdf.set_xy(cx + 11, card_y + 5)
+        pdf.cell(card_w - 14, 5, label.upper())
+        text = fmt_money(value)
+        pdf.set_text_color(*accent)
+        pdf.set_font("dejavu", "B", 15 if len(text) < 12 else 13)
+        pdf.set_xy(cx + 6, card_y + 13)
+        pdf.cell(card_w - 12, 9, text)
+        pdf.set_text_color(*MUTED)
+        pdf.set_font("dejavu", "", 8)
+        pdf.set_xy(cx + 6, card_y + 22)
+        pdf.cell(card_w - 12, 5, t(lang, "pdf_currency"))
+
+    # ---------- «Вайб-строка»: человеческим языком, что с балансом ----------
+    vibe_y = card_y + 31 + 6
+    if debt > 0:
+        vibe = t(lang, "pdf_vibe_debt", amount=fmt_money(debt))
+    elif debt < 0:
+        vibe = t(lang, "pdf_vibe_over", amount=fmt_money(-debt))
+    else:
+        vibe = t(lang, "pdf_vibe_zero")
+    pdf.set_fill_color(*INK)
+    pdf.rect(pdf.l_margin, vibe_y, content_w, 13, style="F", round_corners=True, corner_radius=6.5)
+    gradient_band(pdf, pdf.l_margin + 5, vibe_y + 4.5, 4, 4, PURPLE, PINK, steps=4)
+    pdf.set_text_color(*WHITE)
+    pdf.set_font("dejavu", "B", 10.5)
+    pdf.set_xy(pdf.l_margin + 12, vibe_y)
+    pdf.cell(content_w - 16, 13, vibe)
+
+    # ---------- Таблица поставок ----------
+    pdf.set_y(vibe_y + 13 + 8)
+    portions_total = sum(int(d.portions or 0) for d in deliveries)
+    pdf.set_text_color(*INK)
+    pdf.set_font("dejavu", "B", 14)
+    pdf.cell(70, 8, t(lang, "pdf_deliveries_title"))
+    pdf.set_font("dejavu", "", 9)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(content_w - 70, 8, t(lang, "pdf_stats_line", count=len(deliveries), portions=portions_total),
+             align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.ln(2)
+
     period_total = Decimal("0")
-    period_portions = 0
     if deliveries:
+        pdf.set_text_color(*INK)
         pdf.set_font("dejavu", "", 9)
+        # Чётные строки берут текущий цвет заливки — сбрасываем его на белый,
+        # иначе туда «протекает» последний цвет градиента (розовый)
+        pdf.set_fill_color(*WHITE)
         with pdf.table(
-            col_widths=(28, 92, 25, 35),
-            text_align=("CENTER", "LEFT", "RIGHT", "RIGHT"),
-            line_height=6,
+            col_widths=(26, 96, 24, 36),
+            text_align=("LEFT", "LEFT", "RIGHT", "RIGHT"),
+            line_height=7.5,
+            padding=(0.8, 3),
+            borders_layout="NONE",
+            headings_style=FontFace(emphasis="BOLD", color=WHITE, fill_color=INK),
+            cell_fill_color=ZEBRA,
+            cell_fill_mode="ROWS",
             first_row_as_headings=True,
         ) as table:
             head = table.row()
             for key in ("pdf_date", "pdf_dish", "pdf_portions", "pdf_amount"):
                 head.cell(t(lang, key))
-            # Хронологический порядок в акте
-            for d in sorted(deliveries, key=lambda x: (x.date, x.id or 0)):
+            for d in sorted(deliveries, key=lambda x: (x.date, x.id or 0)):   # хронологический порядок
                 row = table.row()
                 row.cell(d.date.strftime("%d.%m.%Y"))
                 row.cell(d.dish_name)
                 row.cell(str(d.portions))
                 row.cell(fmt_money(d.amount))
                 period_total += Decimal(d.amount or 0)
-                period_portions += int(d.portions or 0)
-            total_row = table.row()
-            total_row.cell(t(lang, "pdf_total"), colspan=2)
-            total_row.cell(str(period_portions))
-            total_row.cell(fmt_money(period_total))
+            total_style = FontFace(emphasis="BOLD", color=VIOLET, fill_color=LILAC_BG)
+            total = table.row()
+            total.cell(f"{t(lang, 'pdf_total_period')} ✦", colspan=2, style=total_style)
+            total.cell(str(portions_total), style=total_style)
+            total.cell(fmt_money(period_total), style=total_style)
     else:
+        y = pdf.get_y()
+        pdf.set_fill_color(*LILAC_BG)
+        pdf.rect(pdf.l_margin, y, content_w, 16, style="F", round_corners=True, corner_radius=5)
+        pdf.set_xy(pdf.l_margin, y)
         pdf.set_font("dejavu", "", 10)
-        pdf.cell(0, 8, t(lang, "pdf_no_data"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_text_color(*MUTED)
+        pdf.cell(content_w, 16, t(lang, "pdf_no_data"), align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    # ---- Итоги взаиморасчётов (накопительно)
-    pdf.ln(6)
-    for key, value, bold in (
-        ("pdf_total", invoice.get("charged", 0), False),
-        ("pdf_paid", invoice.get("paid", 0), False),
-        ("pdf_debt", invoice.get("debt", 0), True),
-    ):
-        pdf.set_font("dejavu", "B" if bold else "", 11)
-        pdf.cell(130, 7, t(lang, key) + ":", align="R")
-        pdf.cell(50, 7, fmt_money(value), align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    # ---- Подписи сторон
-    if pdf.get_y() > pdf.h - 60:
+    # ---------- Подписи сторон: две карточки с линией подписи ----------
+    if pdf.get_y() > pdf.h - 62:
         pdf.add_page()
-    pdf.ln(16)
+    pdf.ln(10)
     y = pdf.get_y()
-    col_w = (pdf.w - pdf.l_margin - pdf.r_margin - 10) / 2
+    col_w = (content_w - 8) / 2
     for i, (title, name) in enumerate(
         ((t(lang, "pdf_supplier"), t(lang, "pdf_company")), (t(lang, "pdf_client"), client_name))
     ):
-        x = pdf.l_margin + i * (col_w + 10)
-        pdf.set_xy(x, y)
-        pdf.set_font("dejavu", "B", 10)
-        pdf.cell(col_w, 6, title, new_x=XPos.LEFT, new_y=YPos.NEXT)
-        pdf.set_font("dejavu", "", 10)
-        pdf.cell(col_w, 6, name, new_x=XPos.LEFT, new_y=YPos.NEXT)
-        pdf.ln(12)
-        pdf.set_x(x)
-        pdf.cell(col_w, 0, "", border="T", new_x=XPos.LEFT, new_y=YPos.NEXT)
-        pdf.set_x(x)
-        pdf.set_font("dejavu", "", 8)
-        pdf.cell(col_w, 5, t(lang, "pdf_signature"))
+        sx = pdf.l_margin + i * (col_w + 8)
+        pdf.set_draw_color(*PURPLE)
+        pdf.set_line_width(0.4)
+        pdf.rect(sx, y, col_w, 36, style="D", round_corners=True, corner_radius=5)
+        pdf.set_xy(sx + 6, y + 5)
+        pdf.set_font("dejavu", "B", 7.5)
+        pdf.set_text_color(*MUTED)
+        pdf.cell(col_w - 12, 5, title.upper())
+        pdf.set_xy(sx + 6, y + 11)
+        pdf.set_font("dejavu", "B", 11)
+        pdf.set_text_color(*INK)
+        pdf.cell(col_w - 12, 6, name)
+        pdf.set_draw_color(203, 213, 225)
+        pdf.set_line_width(0.3)
+        pdf.line(sx + 6, y + 28, sx + col_w - 6, y + 28)
+        pdf.set_xy(sx + 6, y + 29)
+        pdf.set_font("dejavu", "", 7.5)
+        pdf.set_text_color(*MUTED)
+        pdf.cell(col_w - 12, 5, t(lang, "pdf_signature"))
+    pdf.set_text_color(*INK)
 
     return bytes(pdf.output())

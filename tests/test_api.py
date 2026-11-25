@@ -236,3 +236,53 @@ async def test_stats_csv_export_has_totals_and_clients(client):
 async def test_stats_export_forbidden_for_cook(client):
     r = await client.post("/api/stats/export-send", json={}, headers=auth_headers(COOK_ID))
     assert r.status_code == 403
+
+
+# ------------------------------------------------------------------ Профиль, язык, ИИ-чат
+
+async def test_me_returns_role_language_and_support(client, monkeypatch):
+    import dataclasses
+
+    import api.routers.me as me_router
+
+    patched = dataclasses.replace(me_router.get_settings(), support_telegram="kitchen_help")
+    monkeypatch.setattr(me_router, "get_settings", lambda: patched)   # Settings заморожен — подменяем целиком
+    r = await client.get("/api/me", headers=auth_headers(CLIENT_ID))
+    assert r.status_code == 200
+    me = r.json()
+    assert (me["role"], me["language"]) == ("client", "en")
+    assert me["support_url"] == "https://t.me/kitchen_help"
+
+
+async def test_language_is_saved_and_validated(client, db):
+    r = await client.post("/api/me/language", json={"language": "uz"}, headers=auth_headers(COOK_ID))
+    assert r.status_code == 200
+    async with db() as s:
+        from sqlalchemy import select
+        assert (await s.execute(select(User.language).where(User.telegram_id == COOK_ID))).scalar_one() == "uz"
+    r = await client.post("/api/me/language", json={"language": "de"}, headers=auth_headers(COOK_ID))
+    assert r.status_code == 400
+
+
+async def test_ai_chat_sends_stock_context_and_returns_answer(client, monkeypatch):
+    import api.routers.ai as ai_router
+
+    seen = {}
+
+    async def fake_chat(history, system):
+        seen["history"], seen["system"] = history, system
+        return "Купите 10 кг риса 🍚"
+
+    monkeypatch.setattr(ai_router, "chat", fake_chat)
+    r = await client.post("/api/ai/chat", json={"messages": [{"role": "user", "text": "Сколько риса купить?"}]},
+                          headers=auth_headers(PURCHASER_ID))
+    assert r.status_code == 200 and r.json()["answer"] == "Купите 10 кг риса 🍚"
+    assert "Рис: остаток 10 kg" in seen["system"]          # ИИ видит реальный склад
+    assert seen["history"][-1]["text"] == "Сколько риса купить?"
+
+
+async def test_ai_chat_rules(client):
+    msgs = {"messages": [{"role": "user", "text": "привет"}]}
+    assert (await client.post("/api/ai/chat", json=msgs, headers=auth_headers(CLIENT_ID))).status_code == 403
+    bad = {"messages": [{"role": "user", "text": "a"}, {"role": "assistant", "text": "b"}]}
+    assert (await client.post("/api/ai/chat", json=bad, headers=auth_headers(PURCHASER_ID))).status_code == 400

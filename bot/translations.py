@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-LANGUAGES = {"ru": "🇷🇺 Русский", "en": "🇬🇧 English", "uz": "🇺🇿 O'zbekcha", "zh": "🇨🇳 中文"}
+LANGUAGES = {"uz": "🇺🇿 O'zbekcha", "ru": "🇷🇺 Русский", "en": "🇬🇧 English", "zh": "🇨🇳 中文"}   # как в Mini App: узбекский (латиница) первым
 DEFAULT_LANG = "ru"
 
 TRANSLATIONS: dict[str, dict[str, str]] = {
@@ -76,6 +76,16 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "pdf_generated": "Сформировано",
         "pdf_no_data": "Поставок за период нет",
         "pdf_all_time": "за всё время",
+        "pdf_hero": "Акт сверки",
+        "pdf_overpaid": "Переплата",
+        "pdf_currency": "сум",
+        "pdf_vibe_debt": "Осталось закрыть {amount} сум — и мы в расчёте ✓",
+        "pdf_vibe_over": "У вас переплата {amount} сум — учтём в следующих поставках ★",
+        "pdf_vibe_zero": "Всё чётко: расчёты закрыты, никто никому не должен ✓",
+        "pdf_deliveries_title": "Поставки",
+        "pdf_stats_line": "{count} поставок · {portions} порций",
+        "pdf_total_period": "Итого за период",
+        "pdf_footer": "сделано с ♥",
         "act_caption": "📄 Акт сверки — {client}",
     },
     "en": {
@@ -139,6 +149,16 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "pdf_generated": "Generated",
         "pdf_no_data": "No deliveries in this period",
         "pdf_all_time": "all time",
+        "pdf_hero": "Statement",
+        "pdf_overpaid": "Overpaid",
+        "pdf_currency": "UZS",
+        "pdf_vibe_debt": "{amount} UZS left to settle — then we're all square ✓",
+        "pdf_vibe_over": "You've overpaid {amount} UZS — we'll apply it to the next deliveries ★",
+        "pdf_vibe_zero": "All good: fully settled, nobody owes anybody ✓",
+        "pdf_deliveries_title": "Deliveries",
+        "pdf_stats_line": "{count} deliveries · {portions} portions",
+        "pdf_total_period": "Total for the period",
+        "pdf_footer": "made with ♥",
         "act_caption": "📄 Reconciliation statement — {client}",
     },
     "uz": {
@@ -202,6 +222,16 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "pdf_generated": "Tuzilgan sana",
         "pdf_no_data": "Bu davrda yetkazmalar yo'q",
         "pdf_all_time": "butun davr",
+        "pdf_hero": "Solishtirma dalolatnoma",
+        "pdf_overpaid": "Ortiqcha to'lov",
+        "pdf_currency": "so'm",
+        "pdf_vibe_debt": "Yana {amount} so'm to'lansa — hisob-kitob yopiladi ✓",
+        "pdf_vibe_over": "Sizda {amount} so'm ortiqcha to'lov — keyingi yetkazishlarda hisobga olamiz ★",
+        "pdf_vibe_zero": "Hammasi joyida: hisob-kitob yopilgan, hech kim qarzdor emas ✓",
+        "pdf_deliveries_title": "Yetkazishlar",
+        "pdf_stats_line": "{count} ta yetkazish · {portions} porsiya",
+        "pdf_total_period": "Davr uchun jami",
+        "pdf_footer": "♥ bilan yaratilgan",
         "act_caption": "📄 Solishtirish dalolatnomasi — {client}",
     },
     "zh": {
@@ -265,6 +295,16 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "pdf_generated": "生成日期",
         "pdf_no_data": "该期间没有送货记录",
         "pdf_all_time": "全部期间",
+        "pdf_hero": "对账单",
+        "pdf_overpaid": "多付",
+        "pdf_currency": "苏姆",
+        "pdf_vibe_debt": "还需支付 {amount} 苏姆，就两清了 ✓",
+        "pdf_vibe_over": "您多付了 {amount} 苏姆，将抵扣后续供货 ★",
+        "pdf_vibe_zero": "一切正常：账目已结清，互不相欠 ✓",
+        "pdf_deliveries_title": "供货明细",
+        "pdf_stats_line": "{count} 次供货 · {portions} 份",
+        "pdf_total_period": "本期合计",
+        "pdf_footer": "用 ♥ 制作",
         "act_caption": "📄 对账单 — {client}",
     },
 }

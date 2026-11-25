@@ -791,3 +791,85 @@ th.right, td.right { text-align: right; }
 @media (hover: none) {
   .kpi:hover, .client-card:hover, .recipe-card:hover { transform: none; }
 }
+
+/* ---------- 20. Верхняя строка: бренд, поддержка, язык ---------- */
+.top-tools { display: flex; align-items: center; gap: 8px; margin-bottom: -4px; }
+.top-tools .brand { margin-right: auto; font-size: 14px; color: var(--text-muted); letter-spacing: 0.02em; }
+.top-tools .brand b { background: var(--grad-primary); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.tool-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 44px; padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: rgba(30, 41, 59, 0.7);
+  color: var(--text);
+  font: inherit; font-size: 14px; font-weight: 600;
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t), transform var(--t-fast);
+}
+.tool-btn:hover { border-color: var(--primary); background: var(--primary-soft); }
+.tool-btn:active { transform: scale(0.95); }
+
+/* Выбор языка */
+.lang-list { display: flex; flex-direction: column; gap: 8px; }
+.lang-option {
+  display: flex; align-items: center; gap: 14px;
+  min-height: 56px; padding: 12px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text);
+  font: inherit; font-size: 16px; font-weight: 600; text-align: left;
+  cursor: pointer;
+  transition: all var(--t);
+}
+.lang-option .flag { font-size: 24px; }
+.lang-option .grow { flex: 1; }
+.lang-option .check { opacity: 0; color: #c7d2fe; font-weight: 800; }
+.lang-option:hover { border-color: var(--primary); }
+.lang-option.active { background: var(--primary-soft); border-color: var(--primary); }
+.lang-option.active .check { opacity: 1; }
+
+/* ---------- 21. ИИ-чат закупщика ---------- */
+.chat-card { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+.chat-log {
+  display: flex; flex-direction: column; gap: 10px;
+  min-height: 300px; max-height: 58vh; overflow-y: auto;
+  padding: 4px 2px; scroll-behavior: smooth;
+}
+.bubble {
+  max-width: 86%;
+  padding: 10px 14px;
+  border-radius: 18px;
+  font-size: 15px; line-height: 1.5;
+  white-space: pre-wrap; word-wrap: break-word;
+  animation: fade-up 0.25s var(--ease) both;
+}
+.bubble.user { align-self: flex-end; background: var(--grad-primary); color: #fff; border-bottom-right-radius: 6px; }
+.bubble.ai { align-self: flex-start; background: var(--bg-soft); border-bottom-left-radius: 6px; }
+.bubble.ai.error { background: var(--danger-soft); color: #fecaca; }
+.bubble .who { display: block; font-size: 12px; font-weight: 700; opacity: 0.75; margin-bottom: 2px; }
+.ai-hello { text-align: center; padding: 18px 8px 6px; color: var(--text-muted); }
+.ai-hello .ai-avatar {
+  width: 64px; height: 64px; margin: 0 auto 10px;
+  display: grid; place-items: center; font-size: 32px;
+  border-radius: 22px; background: var(--grad-primary); box-shadow: var(--shadow-glow);
+}
+.ai-hello h3 { color: var(--text); margin-bottom: 4px; }
+.typing { display: inline-flex; gap: 4px; padding: 4px 0; }
+.typing i { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); animation: blink 1.2s infinite both; }
+.typing i:nth-child(2) { animation-delay: 0.2s; }
+.typing i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+.chat-input { display: flex; gap: 8px; align-items: flex-end; }
+.chat-input textarea { resize: none; min-height: 48px; max-height: 140px; line-height: 1.4; border-radius: 22px; padding: 12px 16px; }
+.send-btn {
+  width: 48px; height: 48px; flex-shrink: 0;
+  display: grid; place-items: center;
+  border: 0; border-radius: 50%;
+  background: var(--grad-primary); color: #fff; font-size: 20px;
+  box-shadow: var(--shadow-glow); cursor: pointer;
+  transition: transform var(--t-fast), opacity var(--t);
+}
+.send-btn:active { transform: scale(0.9); }
+.send-btn:disabled { opacity: 0.45; }

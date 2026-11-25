@@ -115,6 +115,6 @@ pytest
 
 ## Шрифты PDF
 
-В Docker-образ ставятся `fonts-dejavu-core` и `fonts-noto-cjk`. Для запуска без Docker положите
-`DejaVuSans.ttf`, `DejaVuSans-Bold.ttf` и `NotoSansSC-Regular.otf` (или `.ttf`) в папку `fonts/`
+В Docker-образ ставятся `fonts-dejavu-core` и `fonts-wqy-microhei` (китайский). Для запуска без Docker положите
+`DejaVuSans.ttf`, `DejaVuSans-Bold.ttf` и `wqy-microhei.ttc` (нужен TrueType-шрифт: OTF/CFF вроде Noto CJK fpdf2 встраивает неверно) в папку `fonts/`
 или укажите каталог в `FONT_DIR`.

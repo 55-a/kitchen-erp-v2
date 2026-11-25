@@ -6,9 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Шрифты для PDF: DejaVuSans (кириллица/латиница) и Noto Sans CJK (китайский)
+# Шрифты для PDF: DejaVuSans (кириллица/латиница) и WenQuanYi Micro Hei (китайский, TrueType —
+# Noto CJK с CFF-контурами fpdf2 встраивает неверно, вместо иероглифов выходят цифры)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends fonts-dejavu-core fonts-noto-cjk \
+    && apt-get install -y --no-install-recommends fonts-dejavu-core fonts-wqy-microhei \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

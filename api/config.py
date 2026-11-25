@@ -51,6 +51,8 @@ class Settings:
     default_language: str = "ru"
     # Каталог со шрифтами для PDF (если шрифты лежат не в системных путях)
     font_dir: str = ""
+    # Telegram-ник поддержки (без @) — кнопка «Поддержка» в Mini App. Пусто — кнопка скрыта.
+    support_telegram: str = ""
 
     @property
     def async_database_url(self) -> str:
@@ -79,4 +81,5 @@ def get_settings() -> Settings:
         run_bot_in_api=_bool(os.getenv("RUN_BOT_IN_API"), True),
         default_language=os.getenv("DEFAULT_LANGUAGE", "ru"),
         font_dir=os.getenv("FONT_DIR", ""),
+        support_telegram=os.getenv("SUPPORT_TELEGRAM", "").strip().lstrip("@"),
     )
