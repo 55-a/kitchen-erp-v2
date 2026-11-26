@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.config import get_settings
 from api.database import session_scope
 from api.models import User
-from bot.keyboards import LangCB, RoleCB, enter_keyboard, entry_url, lang_keyboard, role_keyboard, role_menu
+from bot.keyboards import LangCB, RoleCB, entry_url, lang_keyboard, role_keyboard
 from bot.translations import t
 from bot.utils import can_take_role, effective_role, get_or_create_user, linked_client
 
@@ -31,38 +31,34 @@ async def build_menu(session: AsyncSession, user: User) -> tuple[str, object | N
     role = effective_role(user)
     owner = is_owner_account(user.telegram_id)
     if role is None:
-        if owner:
-            return t(lang, "no_role"), role_keyboard(lang)
-        # Роль назначает владелец («👥 Команда») — человек ждёт
-        return t(lang, "await_role", name=html.escape(user.full_name or ""), tg_id=user.telegram_id), enter_keyboard(lang)
+        # Роль назначает владелец («👥 Команда») — человек ждёт, кнопок не нужно
+        return t(lang, "await_role", name=html.escape(user.full_name or ""), tg_id=user.telegram_id), None
     if role == "client":
         client = await linked_client(session, user.telegram_id)
         if client is None and owner:
             # Владелец проверяет кабинет клиента: компанию выбирает в Mini App
             text = t(lang, "welcome_client_owner")
         elif client is None:
-            return t(lang, "client_not_linked", tg_id=user.telegram_id), enter_keyboard(lang)
+            return t(lang, "client_not_linked", tg_id=user.telegram_id), None
         else:
             text = t(lang, "welcome_client", client=html.escape(client.name))
     else:
         text = t(lang, f"welcome_{role}")
-    if not get_settings().webapp_url:
-        text += "\n\n" + t(lang, "webapp_not_configured")
-    return text, role_menu(role, lang, can_switch=owner)
+    # Кнопок в сообщении нет: всё внутри приложения («ОТКРЫТЬ» в списке чатов или «Войти» внизу)
+    text += "\n\n" + t(lang, "open_hint" if get_settings().webapp_url else "webapp_not_configured")
+    return text, None
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
-    """Владелец — выбор роли (проверить кабинеты). Остальные — сразу своё меню или «ждём роль»."""
+    """Приветствие своей роли без кнопок (или «ждём роль»): всё внутри приложения.
+    Владелец проверяет другие кабинеты через 👤 в приложении."""
     async with session_scope() as session:
         is_new = (await session.execute(
             select(User.id).where(User.telegram_id == message.from_user.id))).scalar_one_or_none() is None
         user = await get_or_create_user(session, message.from_user)
         lang = user.language
-        if is_owner_account(user.telegram_id):
-            text, kb = t(lang, "choose_role"), role_keyboard(lang)
-        else:
-            text, kb = await build_menu(session, user)
+        text, kb = await build_menu(session, user)
     await message.answer(text, reply_markup=kb)
     await set_enter_button(message, lang)
     if is_new and not is_owner_account(message.from_user.id):

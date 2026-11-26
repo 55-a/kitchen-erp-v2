@@ -50,13 +50,11 @@ def entry_url(lang: str) -> str | None:
 
 
 def role_keyboard(lang: str) -> InlineKeyboardMarkup:
+    """Выбор роли (только для владельца — проверить кабинеты)."""
     kb = InlineKeyboardBuilder()
-    url = entry_url(lang)
-    if url:  # первой — большая кнопка входа в приложение
-        kb.row(InlineKeyboardButton(text=t(lang, "btn_enter_app"), web_app=WebAppInfo(url=url)))
     for role in ("owner", "cook", "purchaser", "client"):
         kb.button(text=t(lang, f"role_{role}"), callback_data=RoleCB(role=role))
-    kb.adjust(1, 2, 2) if url else kb.adjust(2)
+    kb.adjust(2)
     return kb.as_markup()
 
 
@@ -66,35 +64,6 @@ def lang_keyboard() -> InlineKeyboardMarkup:
         kb.button(text=title, callback_data=LangCB(code=code))
     kb.adjust(2)
     return kb.as_markup()
-
-
-# Кнопки каждой роли: (ключ перевода, вкладка Mini App)
-ROLE_BUTTONS: dict[str, list[tuple[str, str | None]]] = {
-    "owner": [("btn_stats", "stats"), ("btn_clients", "clients")],
-    "cook": [("btn_new_batch", "batch"), ("btn_recipes", "recipes")],
-    "purchaser": [("btn_new_purchase", "purchase")],
-    "client": [("btn_deliveries", "deliveries"), ("btn_invoice", "invoice"), ("btn_act", "act")],
-}
-
-
-def role_menu(role: str, lang: str, can_switch: bool = True) -> InlineKeyboardMarkup:
-    """Меню роли: кнопки открывают нужную вкладку Mini App. «Сменить роль» — только владельцу."""
-    rows: list[list[InlineKeyboardButton]] = []
-    for key, tab in ROLE_BUTTONS.get(role, []):
-        btn = _webapp_button(t(lang, key), role, lang, tab)
-        if btn:
-            rows.append([btn])
-    if can_switch:
-        rows.append([InlineKeyboardButton(text=t(lang, "btn_change_role"), callback_data="change_role")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def enter_keyboard(lang: str) -> InlineKeyboardMarkup | None:
-    """Одна кнопка входа в приложение (для тех, кто ждёт роль)."""
-    url = entry_url(lang)
-    if not url:
-        return None
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t(lang, "btn_enter_app"), web_app=WebAppInfo(url=url))]])
 
 
 def receipt_item_keyboard(lang: str, draft_id: int, idx: int) -> InlineKeyboardMarkup:
