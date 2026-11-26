@@ -58,7 +58,8 @@ async def test_start_for_newcomer_waits_for_owner(db):
     text = msg.answer.call_args.args[0]
     markup = msg.answer.call_args.kwargs["reply_markup"]
     assert text == t("en", "await_role", name="Test", tg_id=500)   # язык взят из Telegram
-    assert markup is None                                           # ждёт роль — кнопок нет
+    assert keyboard_texts(markup) == [t("en", "btn_enter_app")]    # только вход, без выбора ролей
+    assert markup.inline_keyboard[0][0].web_app.url == "https://example.test/app?lang=en"
 
     user = await get_user(db, 500)
     assert user is not None and user.language == "en" and user.role is None
@@ -68,14 +69,12 @@ async def test_start_for_newcomer_waits_for_owner(db):
     assert len(SENT) == 1
 
 
-async def test_owner_start_shows_one_open_button(db):
-    """Владелец по /start — своё меню с одной кнопкой «Открыть кабинет», без списка ролей."""
+async def test_owner_start_shows_role_choice(db):
     msg = fake_message(OWNER_ID)
     await cmd_start(msg)
-    assert msg.answer.call_args.args[0] == t("ru", "welcome_owner")
-    markup = msg.answer.call_args.kwargs["reply_markup"]
-    assert keyboard_texts(markup) == [t("ru", "btn_open_cabinet")]
-    assert markup.inline_keyboard[0][0].web_app.url == "https://example.test/app/owner?lang=ru"
+    assert msg.answer.call_args.args[0] == t("ru", "choose_role")
+    assert keyboard_texts(msg.answer.call_args.kwargs["reply_markup"]) == [t("ru", "btn_enter_app")] + [
+        t("ru", f"role_{r}") for r in ("owner", "cook", "purchaser", "client")]
 
 
 async def test_owner_role_is_denied_for_regular_user(db):
@@ -105,20 +104,24 @@ async def test_owner_can_switch_to_other_roles_and_back(db):
         assert stored == role
         assert resolve_role(OWNER_ID, stored, settings) == role
     markup = cb.message.edit_text.call_args.kwargs["reply_markup"]
-    assert keyboard_texts(markup) == [t("ru", "btn_open_cabinet")]
+    assert t("ru", "btn_stats") in keyboard_texts(markup)
 
 
 async def test_cook_assigned_by_owner_gets_cook_menu(db):
-    """Повар (роль назначил владелец) по /start — одна кнопка «Открыть кабинет» повара."""
+    """Повар (роль назначил владелец) по /start сразу видит своё меню, без «Сменить роль»."""
     async with db() as s:
         s.add(User(telegram_id=COOK_ID, role="cook", language="ru"))
         await s.commit()
     msg = fake_message(COOK_ID)
     await cmd_start(msg)
     assert msg.answer.call_args.args[0] == t("ru", "welcome_cook")
+    texts = keyboard_texts(msg.answer.call_args.kwargs["reply_markup"])
+    assert t("ru", "btn_new_batch") in texts and t("ru", "btn_recipes") in texts
+    assert t("ru", "btn_change_role") not in texts
     markup = msg.answer.call_args.kwargs["reply_markup"]
-    assert keyboard_texts(markup) == [t("ru", "btn_open_cabinet")]
-    assert markup.inline_keyboard[0][0].web_app.url == "https://example.test/app/cook?lang=ru"
+    # Кнопки открывают Mini App по HTTPS
+    urls = [b.web_app.url for row in markup.inline_keyboard for b in row if b.web_app]
+    assert urls and all(u.startswith("https://example.test/app/cook") for u in urls)
 
 
 # ------------------------------------------------------------------ /lang
@@ -157,7 +160,7 @@ async def test_owner_in_client_role_gets_client_menu(db):
     await cb_choose_role(cb, RoleCB(role="client"))
     args = cb.message.edit_text.call_args
     assert args.args[0] == t("ru", "welcome_client_owner")
-    assert args.kwargs["reply_markup"].inline_keyboard[0][0].web_app.url == "https://example.test/app/client?lang=ru"
+    assert t("ru", "btn_deliveries") in keyboard_texts(args.kwargs["reply_markup"])
 
 
 # ------------------------------------------------------------------ Узбекский на кириллице
