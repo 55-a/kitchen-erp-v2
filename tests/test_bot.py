@@ -54,7 +54,9 @@ async def test_start_creates_user_and_shows_roles(db):
     text = msg.answer.call_args.args[0]
     markup = msg.answer.call_args.kwargs["reply_markup"]
     assert text == t("en", "choose_role")  # язык взят из Telegram
-    assert keyboard_texts(markup) == [t("en", f"role_{r}") for r in ("owner", "cook", "purchaser", "client")]
+    # Первой — кнопка «Войти в приложение» (экран входа), дальше роли
+    assert keyboard_texts(markup) == [t("en", "btn_enter_app")] + [t("en", f"role_{r}") for r in ("owner", "cook", "purchaser", "client")]
+    assert markup.inline_keyboard[0][0].web_app.url == "https://example.test/app?lang=en"
 
     user = await get_user(db, 500)
     assert user is not None and user.language == "en" and user.role is None

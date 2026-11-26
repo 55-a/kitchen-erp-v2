@@ -147,194 +147,169 @@ def _pill(pdf: FPDF, x: float, y: float, text: str, *, fill: tuple, color: tuple
     return w
 
 
-def build_act_pdf(
-    *,
-    client_name: str,
-    deliveries: list,
-    invoice: dict,
-    lang: str,
-    date_from: dt.date | None = None,
-    date_to: dt.date | None = None,
-) -> bytes:
+
+
+def _who_owes(lang: str, balance: Decimal, client_name: str, date: dt.date, kind: str) -> str:
+    """Фраза о долге простыми словами (kind: open — на начало периода, close — итог)."""
+    company = t(lang, "pdf_company")
+    d = f"{date:%d.%m.%Y}"
+    if balance > 0:
+        return t(lang, f"act_{kind}_debt", date=d, client=client_name, company=company, amount=fmt_money(balance))
+    if balance < 0:
+        return t(lang, f"act_{kind}_over", date=d, client=client_name, company=company, amount=fmt_money(-balance))
+    return t(lang, f"act_{kind}_zero", date=d, client=client_name, company=company)
+
+
+def build_act_pdf(*, statement: dict, lang: str) -> bytes:
     """
-    Строит акт сверки.
-    deliveries — объекты ClientDelivery (date, dish_name, portions, amount),
-    invoice    — результат services.client_invoice (charged, paid, debt).
+    Акт сверки «как в 1С», но простыми словами (без «дебет/кредит/сальдо»):
+    шапка → долг на начало → все поставки и оплаты по датам с долгом после каждой →
+    итоги за период → итоговая фраза «кто кому должен» → подписи сторон.
+    statement — результат services.client_statement().
     """
+    st = statement
+    client_name = st["client"]
+    company = t(lang, "pdf_company")
     pdf = ActPDF(lang)
     pdf.alias_nb_pages()
     pdf.add_page()
-    content_w = pdf.w - pdf.l_margin - pdf.r_margin
+    w = pdf.w - pdf.l_margin - pdf.r_margin
 
-    # ---------- Период ----------
-    dates = sorted(d.date for d in deliveries)
-    start = date_from or (dates[0] if dates else None)
-    end = date_to or (dates[-1] if dates else None)
-    period = f"{start:%d.%m.%Y} — {end:%d.%m.%Y}" if start and end else t(lang, "pdf_all_time")
-
-    # ---------- Шапка: градиент фиолетовый → розовый + декоративные круги ----------
-    band_h = 62
-    gradient_band(pdf, 0, 0, pdf.w, band_h, VIOLET, PINK)
-    with pdf.local_context(fill_opacity=0.12):
-        pdf.set_fill_color(*WHITE)
-        pdf.circle(x=pdf.w - 18, y=6, radius=34, style="F")
-        pdf.circle(x=pdf.w - 58, y=band_h - 4, radius=14, style="F")
-
-    _pill(pdf, pdf.l_margin, 12, f"{t(lang, 'pdf_company').upper()} ✦", fill=WHITE, color=WHITE, opacity=0.22)
-
-    pdf.set_text_color(*WHITE)
-    pdf.set_font("dejavu", "B", 30)
-    pdf.set_xy(pdf.l_margin, 22)
-    pdf.cell(content_w, 13, t(lang, "pdf_hero"))
-    pdf.set_font("dejavu", "", 12)
-    pdf.set_xy(pdf.l_margin, 36)
-    pdf.cell(content_w, 7, f"{t(lang, 'pdf_company')}  ×  {client_name}")
-
-    x = pdf.l_margin
-    x += _pill(pdf, x, 47, f"{t(lang, 'pdf_period')}: {period}", fill=WHITE, color=WHITE, opacity=0.22) + 3
-    _pill(pdf, x, 47, f"{t(lang, 'pdf_generated')}: {dt.date.today():%d.%m.%Y}", fill=WHITE, color=WHITE, opacity=0.22)
-
-    # ---------- Три карточки: начислено / оплачено / долг или переплата ----------
-    charged = Decimal(str(invoice.get("charged", 0) or 0))
-    paid = Decimal(str(invoice.get("paid", 0) or 0))
-    debt = Decimal(str(invoice.get("debt", 0) or 0))
-    if debt > 0:
-        third = (t(lang, "pdf_debt"), debt, PINK_BG, RED)
-    elif debt < 0:
-        third = (t(lang, "pdf_overpaid"), -debt, MINT_BG, MINT)
-    else:
-        third = (t(lang, "pdf_debt"), Decimal("0"), MINT_BG, MINT)
-    cards = (
-        (t(lang, "pdf_total"), charged, LILAC_BG, VIOLET),
-        (t(lang, "pdf_paid"), paid, MINT_BG, MINT),
-        third,
-    )
-    gap = 5
-    card_w = (content_w - gap * 2) / 3
-    card_y = band_h + 8
-    for i, (label, value, bg, accent) in enumerate(cards):
-        cx = pdf.l_margin + i * (card_w + gap)
-        pdf.set_fill_color(*bg)
-        pdf.rect(cx, card_y, card_w, 31, style="F", round_corners=True, corner_radius=5)
-        pdf.set_fill_color(*accent)                       # цветная точка-акцент
-        pdf.rect(cx + 6, card_y + 6.5, 3, 3, style="F", round_corners=True, corner_radius=1.5)
-        pdf.set_text_color(*MUTED)
-        pdf.set_font("dejavu", "B", 7.5)
-        pdf.set_xy(cx + 11, card_y + 5)
-        pdf.cell(card_w - 14, 5, label.upper())
-        text = fmt_money(value)
-        pdf.set_text_color(*accent)
-        pdf.set_font("dejavu", "B", 15 if len(text) < 12 else 13)
-        pdf.set_xy(cx + 6, card_y + 13)
-        pdf.cell(card_w - 12, 9, text)
-        pdf.set_text_color(*MUTED)
-        pdf.set_font("dejavu", "", 8)
-        pdf.set_xy(cx + 6, card_y + 22)
-        pdf.cell(card_w - 12, 5, t(lang, "pdf_currency"))
-
-    # ---------- «Вайб-строка»: человеческим языком, что с балансом ----------
-    vibe_y = card_y + 31 + 6
-    if debt > 0:
-        vibe = t(lang, "pdf_vibe_debt", amount=fmt_money(debt))
-    elif debt < 0:
-        vibe = t(lang, "pdf_vibe_over", amount=fmt_money(-debt))
-    else:
-        vibe = t(lang, "pdf_vibe_zero")
-    pdf.set_fill_color(*INK)
-    pdf.rect(pdf.l_margin, vibe_y, content_w, 13, style="F", round_corners=True, corner_radius=6.5)
-    gradient_band(pdf, pdf.l_margin + 5, vibe_y + 4.5, 4, 4, PURPLE, PINK, steps=4)
-    pdf.set_text_color(*WHITE)
-    # Длинные языки (узбекский) не помещаются в 10.5pt — уменьшаем шрифт, пока строка не влезет
-    size = 10.5
-    pdf.set_font("dejavu", "B", size)
-    while pdf.get_string_width(vibe) > content_w - 18 and size > 7:
-        size -= 0.5
-        pdf.set_font("dejavu", "B", size)
-    pdf.set_xy(pdf.l_margin + 12, vibe_y)
-    pdf.cell(content_w - 16, 13, vibe)
-
-    # ---------- Таблица поставок ----------
-    pdf.set_y(vibe_y + 13 + 8)
-    portions_total = sum(int(d.portions or 0) for d in deliveries)
-    pdf.set_text_color(*INK)
-    pdf.set_font("dejavu", "B", 14)
-    pdf.cell(70, 8, t(lang, "pdf_deliveries_title"))
-    pdf.set_font("dejavu", "", 9)
+    # ---------- Шапка: фирменная полоса, название, стороны, период ----------
+    gradient_band(pdf, 0, 0, pdf.w, 5, VIOLET, PINK)
+    pdf.set_y(14)
+    pdf.set_text_color(*VIOLET)
+    pdf.set_font("dejavu", "B", 9)
+    pdf.cell(w / 2, 5, f"{company.upper()} ✦")
     pdf.set_text_color(*MUTED)
-    pdf.cell(content_w - 70, 8, t(lang, "pdf_stats_line", count=len(deliveries), portions=portions_total),
-             align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(2)
+    pdf.set_font("dejavu", "", 9)
+    pdf.cell(w / 2, 5, t(lang, "act_made", date=f"{dt.date.today():%d.%m.%Y}"), align="R",
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    period_total = Decimal("0")
-    if deliveries:
+    pdf.ln(3)
+    pdf.set_text_color(*INK)
+    pdf.set_font("dejavu", "B", 22)
+    pdf.cell(w, 11, t(lang, "act_title"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("dejavu", "", 11.5)
+    pdf.multi_cell(w, 6.5, t(lang, "act_between", company=company, client=client_name),
+                   new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_text_color(*MUTED)
+    pdf.set_font("dejavu", "", 10)
+    pdf.cell(w, 6, t(lang, "act_period", date_from=f"{st['date_from']:%d.%m.%Y}", date_to=f"{st['date_to']:%d.%m.%Y}"),
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.ln(2)
+    pdf.set_font("dejavu", "", 9.5)
+    pdf.multi_cell(w, 5.2, t(lang, "act_intro", company=company, client=client_name),
+                   new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    # ---------- Долг на начало периода ----------
+    pdf.ln(4)
+    y = pdf.get_y()
+    pdf.set_fill_color(*LILAC_BG)
+    pdf.rect(pdf.l_margin, y, w, 11, style="F", round_corners=True, corner_radius=3)
+    pdf.set_xy(pdf.l_margin + 5, y)
+    pdf.set_text_color(*INK)
+    pdf.set_font("dejavu", "B", 10)
+    pdf.cell(w - 10, 11, "① " + _who_owes(lang, st["opening"], client_name, st["date_from"], "open"))
+    pdf.set_y(y + 11 + 5)
+
+    # ---------- Таблица: каждая поставка и оплата + долг после неё ----------
+    if st["rows"]:
+        pdf.set_font("dejavu", "", 8.5)
         pdf.set_text_color(*INK)
-        pdf.set_font("dejavu", "", 9)
-        # Чётные строки берут текущий цвет заливки — сбрасываем его на белый,
-        # иначе туда «протекает» последний цвет градиента (розовый)
-        pdf.set_fill_color(*WHITE)
+        pdf.set_fill_color(*WHITE)               # чётные строки без «протекания» цвета
         with pdf.table(
-            col_widths=(26, 96, 24, 36),
-            text_align=("LEFT", "LEFT", "RIGHT", "RIGHT"),
-            line_height=7.5,
-            padding=(0.8, 3),
-            borders_layout="NONE",
+            col_widths=(8, 25, 66, 26, 26, 31),          # сумма = ширине страницы (182 мм), дата в одну строку
+            text_align=("CENTER", "LEFT", "LEFT", "RIGHT", "RIGHT", "RIGHT"),
+            line_height=6.2,
+            padding=(0.8, 1.6),
+            borders_layout="HORIZONTAL_LINES",
             headings_style=FontFace(emphasis="BOLD", color=WHITE, fill_color=INK),
             cell_fill_color=ZEBRA,
             cell_fill_mode="ROWS",
             first_row_as_headings=True,
         ) as table:
             head = table.row()
-            for key in ("pdf_date", "pdf_dish", "pdf_portions", "pdf_amount"):
+            for key in ("act_col_no", "act_col_date", "act_col_what", "act_col_delivered", "act_col_paid", "act_col_balance"):
                 head.cell(t(lang, key))
-            for d in sorted(deliveries, key=lambda x: (x.date, x.id or 0)):   # хронологический порядок
+            pay_style = FontFace(color=MINT)
+            for i, r in enumerate(st["rows"], start=1):
                 row = table.row()
-                row.cell(d.date.strftime("%d.%m.%Y"))
-                row.cell(d.dish_name)
-                row.cell(str(d.portions))
-                row.cell(fmt_money(d.amount))
-                period_total += Decimal(d.amount or 0)
+                row.cell(str(i))
+                row.cell(f"{r['date']:%d.%m.%Y}")
+                if r["kind"] == "delivery":
+                    row.cell(t(lang, "act_row_delivery", dish=r["dish"], portions=r["portions"]))
+                    row.cell(fmt_money(r["delivered"]))
+                    row.cell("")
+                else:
+                    row.cell(t(lang, "act_row_payment", type=t(lang, f"pay_{r['payment_type']}")), style=pay_style)
+                    row.cell("")
+                    row.cell(fmt_money(r["paid"]), style=pay_style)
+                row.cell(fmt_money(r["balance"]))
             total_style = FontFace(emphasis="BOLD", color=VIOLET, fill_color=LILAC_BG)
             total = table.row()
-            total.cell(f"{t(lang, 'pdf_total_period')} ✦", colspan=2, style=total_style)
-            total.cell(str(portions_total), style=total_style)
-            total.cell(fmt_money(period_total), style=total_style)
+            total.cell(t(lang, "act_totals", portions=st["portions"]), colspan=3, style=total_style)
+            total.cell(fmt_money(st["delivered"]), style=total_style)
+            total.cell(fmt_money(st["paid"]), style=total_style)
+            total.cell(fmt_money(st["closing"]), style=total_style)
     else:
-        y = pdf.get_y()
-        pdf.set_fill_color(*LILAC_BG)
-        pdf.rect(pdf.l_margin, y, content_w, 16, style="F", round_corners=True, corner_radius=5)
-        pdf.set_xy(pdf.l_margin, y)
         pdf.set_font("dejavu", "", 10)
         pdf.set_text_color(*MUTED)
-        pdf.cell(content_w, 16, t(lang, "pdf_no_data"), align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(w, 12, t(lang, "act_no_ops"), align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    # ---------- Подписи сторон: две карточки с линией подписи ----------
+    # ---------- Итог: кто кому должен ----------
+    if pdf.get_y() > pdf.h - 95:
+        pdf.add_page()
+    pdf.ln(6)
+    y = pdf.get_y()
+    closing = st["closing"]
+    accent = RED if closing > 0 else MINT
+    bg = PINK_BG if closing > 0 else MINT_BG
+    pdf.set_fill_color(*bg)
+    pdf.rect(pdf.l_margin, y, w, 18, style="F", round_corners=True, corner_radius=4)
+    pdf.set_fill_color(*accent)
+    pdf.rect(pdf.l_margin, y, 2.5, 18, style="F")
+    pdf.set_xy(pdf.l_margin + 7, y + 1)
+    pdf.set_text_color(*accent)
+    pdf.set_font("dejavu", "B", 12)
+    text = "② " + _who_owes(lang, closing, client_name, st["date_to"], "close")
+    size = 12
+    while pdf.get_string_width(text) > w - 12 and size > 8:
+        size -= 0.5
+        pdf.set_font("dejavu", "B", size)
+    pdf.cell(w - 12, 16, text)
+    pdf.set_y(y + 18 + 4)
+
+    # Как читать акт — для тех, кто не бухгалтер
+    pdf.set_text_color(*MUTED)
+    pdf.set_font("dejavu", "", 8.5)
+    pdf.multi_cell(w, 4.6, t(lang, "act_howto"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    # ---------- Подписи сторон ----------
     if pdf.get_y() > pdf.h - 62:
         pdf.add_page()
-    pdf.ln(10)
+    pdf.ln(8)
     y = pdf.get_y()
-    col_w = (content_w - 8) / 2
-    for i, (title, name) in enumerate(
-        ((t(lang, "pdf_supplier"), t(lang, "pdf_company")), (t(lang, "pdf_client"), client_name))
-    ):
-        sx = pdf.l_margin + i * (col_w + 8)
-        pdf.set_draw_color(*PURPLE)
-        pdf.set_line_width(0.4)
-        pdf.rect(sx, y, col_w, 36, style="D", round_corners=True, corner_radius=5)
-        pdf.set_xy(sx + 6, y + 5)
-        pdf.set_font("dejavu", "B", 7.5)
-        pdf.set_text_color(*MUTED)
-        pdf.cell(col_w - 12, 5, title.upper())
-        pdf.set_xy(sx + 6, y + 11)
-        pdf.set_font("dejavu", "B", 11)
+    col_w = (w - 10) / 2
+    for i, name in enumerate((company, client_name)):
+        sx = pdf.l_margin + i * (col_w + 10)
+        pdf.set_xy(sx, y)
         pdf.set_text_color(*INK)
-        pdf.cell(col_w - 12, 6, name)
-        pdf.set_draw_color(203, 213, 225)
-        pdf.set_line_width(0.3)
-        pdf.line(sx + 6, y + 28, sx + col_w - 6, y + 28)
-        pdf.set_xy(sx + 6, y + 29)
-        pdf.set_font("dejavu", "", 7.5)
+        pdf.set_font("dejavu", "B", 10)
+        pdf.cell(col_w, 6, t(lang, "act_sign_from", name=name), new_x=XPos.LEFT, new_y=YPos.NEXT)
+        pdf.set_font("dejavu", "", 8.5)
         pdf.set_text_color(*MUTED)
-        pdf.cell(col_w - 12, 5, t(lang, "pdf_signature"))
+        for key in ("act_sign_role", "act_sign_name", "act_sign_signature"):
+            pdf.ln(4)
+            pdf.set_x(sx)
+            label = t(lang, key)
+            pdf.cell(24, 6, label)
+            pdf.set_draw_color(203, 213, 225)
+            pdf.line(sx + 24, pdf.get_y() + 5, sx + col_w, pdf.get_y() + 5)
+            pdf.ln(2)
+        pdf.ln(4)
+        pdf.set_x(sx)
+        pdf.cell(col_w, 6, t(lang, "act_sign_stamp"))
     pdf.set_text_color(*INK)
 
     return bytes(pdf.output())

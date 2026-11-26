@@ -12,7 +12,7 @@ from aiogram.types import BufferedInputFile, Message
 
 from api.database import session_scope
 from api.pdf_generator import build_act_pdf
-from api.services import client_deliveries, client_invoice
+from api.services import client_statement
 from bot.translations import t
 from bot.utils import effective_role, get_or_create_user, linked_client
 
@@ -31,11 +31,10 @@ async def cmd_act(message: Message) -> None:
         if client is None:
             await message.answer(t(lang, "client_not_linked", tg_id=user.telegram_id))
             return
-        rows = await client_deliveries(session, client.name)
-        invoice = await client_invoice(session, client.name)
+        statement = await client_statement(session, client.name)   # весь период работы
         name = client.name
 
-    pdf = build_act_pdf(client_name=name, deliveries=rows, invoice=invoice, lang=lang)
+    pdf = build_act_pdf(statement=statement, lang=lang)
     await message.answer_document(
         BufferedInputFile(pdf, filename=f"act_{dt.date.today():%Y%m%d}.pdf"),
         caption=t(lang, "act_caption", client=name),

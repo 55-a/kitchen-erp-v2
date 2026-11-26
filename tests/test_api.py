@@ -321,3 +321,83 @@ async def test_ai_chat_skips_hanging_model_and_uses_fast_one(monkeypatch):
     assert answer == "Ответ ✅"
     assert [m for m, _ in calls] == ["gemini-3.5-flash", gemini.CHAT_FAST_MODEL]   # lite — вторая
     assert all(t <= gemini.CHAT_MODEL_TIMEOUT for _, t in calls)                    # не 40 секунд
+
+
+# ------------------------------------------------------------------ Акт сверки «как в 1С»
+
+async def test_statement_opening_rows_and_closing(client, db):
+    """Долг на начало + операции по датам с долгом после каждой + долг на конец."""
+    from api.services import client_invoice, client_statement
+
+    async with db() as s:
+        full = await client_statement(s, "FOYDALI FOOD GROUP")
+        assert full["opening"] == 0
+        assert [r["kind"] for r in full["rows"]] == ["delivery", "payment"]
+        assert [r["balance"] for r in full["rows"]] == [3_000_000, 2_000_000]
+        # Без дат итог акта совпадает со «Счётом» клиента — текущие цифры не меняются
+        assert float(full["closing"]) == (await client_invoice(s, "FOYDALI FOOD GROUP"))["debt"]
+
+        part = await client_statement(s, "FOYDALI FOOD GROUP", dt.date(2025, 10, 3), dt.date(2025, 10, 31))
+        assert part["opening"] == 3_000_000                 # поставка 01.10 — до начала периода
+        assert [r["kind"] for r in part["rows"]] == ["payment"]
+        assert part["closing"] == 2_000_000 and part["delivered"] == 0 and part["paid"] == 1_000_000
+
+
+async def test_act_pdf_builds_in_all_languages(client, db):
+    from api.pdf_generator import build_act_pdf
+    from api.services import client_statement
+
+    async with db() as s:
+        st = await client_statement(s, "FOYDALI FOOD GROUP")
+    for lang in ("ru", "uz", "oz", "en", "zh"):
+        pdf = build_act_pdf(statement=st, lang=lang)
+        assert pdf.startswith(b"%PDF") and len(pdf) > 5000
+
+
+async def test_act_pdf_endpoint_for_client(client):
+    r = await client.get("/api/client/act-pdf", params={"date_from": "2025-10-03"}, headers=auth_headers(CLIENT_ID))
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf"
+
+
+# ------------------------------------------------------------------ План / факт / прогноз
+
+async def test_plan_auto_from_history_and_forecast(client, db):
+    from api.routers.plan import compute_plan, working_days
+
+    assert working_days(dt.date(2025, 10, 1), dt.date(2025, 10, 31)) == 23
+    assert working_days(dt.date(2025, 11, 1), dt.date(2025, 11, 30)) == 20
+    async with db() as s:
+        # Ноябрь 2025: история — октябрь (100 порций за 23 раб. дня), факт — 50 порций
+        p = await compute_plan(s, dt.date(2025, 11, 1), today=dt.date(2025, 11, 12))
+        assert p["plan"] == {"portions": 87, "revenue": 2_608_696.0, "source": "auto"}   # 100/23×20
+        assert p["fact"]["portions"] == 50 and p["days"] == {"total": 20, "passed": 8, "left": 12}
+        assert p["forecast"]["portions"] == 125 and p["forecast"]["pace"] == "month"    # 50 + 50/8×12
+
+        done = await compute_plan(s, dt.date(2025, 11, 1), today=dt.date(2025, 12, 5))
+        assert done["forecast"]["portions"] == 50 and done["forecast"]["pace"] == "final"
+
+
+async def test_manual_plan_overrides_auto_and_can_be_reset(client):
+    h = auth_headers(OWNER_ID)
+    r = await client.put("/api/plan", json={"month": "2025-11", "client": None, "portions": 100, "revenue": 3_000_000}, headers=h)
+    assert r.status_code == 200
+    assert r.json()["plan"] == {"portions": 100, "revenue": 3_000_000.0, "source": "manual"}
+    r = await client.delete("/api/plan", params={"month": "2025-11"}, headers=h)
+    assert r.json()["plan"]["source"] == "auto"
+    assert (await client.get("/api/plan", headers=auth_headers(COOK_ID))).status_code == 403
+
+
+# ------------------------------------------------------------------ Вход: выбор роли в приложении
+
+async def test_role_choice_in_app_follows_bot_rules(client, db):
+    r = await client.post("/api/me/role", json={"role": "cook"}, headers=auth_headers(CLIENT_ID))
+    assert r.status_code == 200
+    me = (await client.get("/api/me", headers=auth_headers(CLIENT_ID))).json()
+    assert me["role"] == "cook"
+    r = await client.post("/api/me/role", json={"role": "owner"}, headers=auth_headers(CLIENT_ID))
+    assert r.status_code == 403                                   # владелец — только из OWNER_IDS
+
+
+async def test_entry_page_is_served(client):
+    r = await client.get("/app")
+    assert r.status_code == 200 and "role-grid" in r.text

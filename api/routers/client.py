@@ -38,7 +38,7 @@ from api.config import get_settings
 from api.database import get_session
 from api.models import Client, ClientDelivery, Payment, User
 from api.pdf_generator import build_act_pdf
-from api.services import client_deliveries, client_invoice, money
+from api.services import client_deliveries, client_invoice, client_statement, money
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["client"])
@@ -128,11 +128,9 @@ async def get_invoice(
 async def _render_act(
     session: AsyncSession, client_name: str, lang: str, date_from: dt.date | None, date_to: dt.date | None
 ) -> bytes:
-    rows = await client_deliveries(session, client_name, date_from, date_to)
-    invoice = await client_invoice(session, client_name)
-    return build_act_pdf(
-        client_name=client_name, deliveries=rows, invoice=invoice, lang=lang, date_from=date_from, date_to=date_to
-    )
+    # Долг на начало периода + все поставки и оплаты по датам + долг на конец (как в 1С)
+    statement = await client_statement(session, client_name, date_from, date_to)
+    return build_act_pdf(statement=statement, lang=lang)
 
 
 def _pdf_response(pdf: bytes, client_name: str) -> Response:

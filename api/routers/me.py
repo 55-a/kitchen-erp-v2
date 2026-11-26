@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,3 +51,31 @@ async def post_language(
         row.language = body.language
     await session.commit()
     return {"language": body.language}
+
+
+class RoleIn(BaseModel):
+    role: str = Field(pattern="^(owner|cook|purchaser|client)$")
+
+
+@router.post("/me/role")
+async def post_role(
+    body: RoleIn,
+    user: AuthUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """
+    Выбор роли прямо в приложении (экран «Войти»). Правила те же, что в боте:
+    владелец — только из OWNER_IDS, повар/закупщик — из STAFF_IDS (если список задан).
+    """
+    from bot.utils import can_take_role
+
+    if not can_take_role(user.telegram_id, body.role):
+        raise HTTPException(403, "Forbidden: role is not allowed")
+    row = (await session.execute(select(User).where(User.telegram_id == user.telegram_id))).scalar_one_or_none()
+    if row is None:
+        row = User(telegram_id=user.telegram_id, full_name=user.first_name, language=user.language, role=body.role)
+        session.add(row)
+    else:
+        row.role = body.role
+    await session.commit()
+    return {"role": body.role}

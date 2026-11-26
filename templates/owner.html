@@ -26,7 +26,7 @@
         <div class="hello" id="hello">Kuxnya NVGR</div>
         <div class="subtitle" data-i18n="owner_panel"></div>
       </div>
-      <div class="balance">
+      <div class="balance tappable" data-explain="balance">
         <div class="label" data-i18n="balance_label"></div>
         <div class="value num" id="balance">—</div>
       </div>
@@ -44,25 +44,25 @@
 
     <!-- ===== 4 KPI: выручка, прибыль, маржа, долги клиентов (2x2) ===== -->
     <section class="kpi-grid" id="kpis">
-      <div class="kpi">
+      <div class="kpi tappable" data-explain="revenue">
         <div class="icon">💰</div>
         <div class="label" data-i18n="revenue"></div>
         <div class="value" id="k-revenue"><div class="skeleton line"></div></div>
         <div class="sub" id="k-revenue-sub"></div>
       </div>
-      <div class="kpi success">
+      <div class="kpi success tappable" data-explain="profit">
         <div class="icon">📈</div>
         <div class="label" data-i18n="profit"></div>
         <div class="value" id="k-profit"><div class="skeleton line"></div></div>
         <div class="sub" id="k-profit-sub"></div>
       </div>
-      <div class="kpi info">
+      <div class="kpi info tappable" data-explain="margin">
         <div class="icon">🎯</div>
         <div class="label" data-i18n="margin"></div>
         <div class="value" id="k-margin"><div class="skeleton line"></div></div>
         <div class="sub" data-i18n="margin_hint"></div>
       </div>
-      <div class="kpi warning">
+      <div class="kpi warning tappable" data-explain="debts">
         <div class="icon">🧾</div>
         <div class="label" data-i18n="kpi_debts"></div>
         <div class="value" id="k-debts"><div class="skeleton line"></div></div>
@@ -72,10 +72,10 @@
 
     <!-- Дополнительные показатели -->
     <section class="mini-stats">
-      <div class="mini-stat"><div class="label" data-i18n="portions"></div><div class="value" id="m-portions">—</div></div>
-      <div class="mini-stat"><div class="label" data-i18n="cost"></div><div class="value" id="m-cost">—</div></div>
-      <div class="mini-stat"><div class="label" data-i18n="purchases_total"></div><div class="value" id="m-purchases">—</div></div>
-      <div class="mini-stat"><div class="label" data-i18n="stock_value"></div><div class="value" id="m-stock">—</div></div>
+      <div class="mini-stat tappable" data-explain="portions"><div class="label" data-i18n="portions"></div><div class="value" id="m-portions">—</div></div>
+      <div class="mini-stat tappable" data-explain="cost"><div class="label" data-i18n="cost"></div><div class="value" id="m-cost">—</div></div>
+      <div class="mini-stat tappable" data-explain="purchases"><div class="label" data-i18n="purchases_total"></div><div class="value" id="m-purchases">—</div></div>
+      <div class="mini-stat tappable" data-explain="stock"><div class="label" data-i18n="stock_value"></div><div class="value" id="m-stock">—</div></div>
     </section>
 
     <!-- ===== Быстрые действия ===== -->
@@ -83,6 +83,23 @@
       <button type="button" class="quick-action" id="qa-operation"><span class="qa-icon">➕</span><span data-i18n="qa_operation"></span></button>
       <button type="button" class="quick-action" id="qa-export"><span class="qa-icon">⬇️</span><span data-i18n="qa_export"></span></button>
       <button type="button" class="quick-action" id="qa-settings"><span class="qa-icon">⚙️</span><span data-i18n="qa_settings"></span></button>
+    </section>
+
+    <!-- ===== План / факт / прогноз на месяц ===== -->
+    <section class="card" id="plan-card">
+      <div class="card-head">
+        <h2>🎯 <span data-i18n="plan_title"></span></h2>
+        <div class="month-nav">
+          <button type="button" class="icon-btn" id="plan-prev" aria-label="prev">‹</button>
+          <span id="plan-month" class="month-label">—</span>
+          <button type="button" class="icon-btn" id="plan-next" aria-label="next">›</button>
+        </div>
+      </div>
+      <div id="plan-body"><div class="skeleton block"></div></div>
+      <div class="row" style="margin-top:12px">
+        <button type="button" class="btn secondary" id="plan-edit">✏️ <span data-i18n="plan_set"></span></button>
+        <button type="button" class="btn ghost" id="plan-how">ⓘ <span data-i18n="plan_how"></span></button>
+      </div>
     </section>
 
     <!-- ===== График выручки по месяцам (на всю ширину) ===== -->
@@ -264,13 +281,14 @@
         const balanceLabel = c.debt > 0 ? t("debt") : c.debt < 0 ? t("overpaid") : t("balance_zero");
         return `
           <article class="client-card">
-            <div class="head">
+            <div class="head tappable" data-open-client="${esc(c.client)}">
               <div class="avatar">${esc(initials(c.client))}</div>
               <div class="grow" style="min-width:0">
                 <div class="name">${esc(c.client)}</div>
                 <div class="small muted">${fmtQty(c.portions)} ${esc(t("portions_short"))} ·
                   <span class="badge ${linked ? "ok" : ""}">${esc(t(linked ? "linked" : "not_linked"))}</span></div>
               </div>
+              <span class="chevron">›</span>
             </div>
             <div class="figures">
               <div class="figure"><div class="label">${esc(t("charged"))}</div><div class="value">${fmtShort(c.charged_total)}</div></div>
@@ -287,7 +305,9 @@
 
     $("clients").addEventListener("click", (ev) => {
       const b = ev.target.closest("[data-op]");
-      if (b) openOperation(b.dataset.client, b.dataset.op);
+      if (b) return openOperation(b.dataset.client, b.dataset.op);
+      const head = ev.target.closest("[data-open-client]");
+      if (head) openClient(head.dataset.openClient);   // нажатие на клиента — его поставки и оплаты
     });
 
     async function loadClientList() {
@@ -408,11 +428,257 @@
     }
     $("qa-settings").addEventListener("click", openSettings);
 
+    // ================= Клиент: его поставки и оплаты (по нажатию на карточку) =================
+    async function openClient(name) {
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = App.skeletonHtml(5);
+      modal({ title: name, body, actions: [
+        { label: t("cancel"), kind: "secondary" },
+        { label: "📄 " + t("act_send_owner"), onClick: async () => {
+          await api("/api/client/act-send", { json: { client: name } });   // бот пришлёт акт владельцу
+          toast(t("sent_to_chat"));
+        } },
+      ] });
+      try {
+        const [inv, del] = await Promise.all([
+          api("/api/client/invoice", { query: { client: name } }),
+          api("/api/client/deliveries", { query: { client: name } }),
+        ]);
+        const items = [...del.items].sort((a, b) => (a.date < b.date ? 1 : -1));   // новые сверху
+        let month = "";
+        const list = items.map((d) => {
+          const m = d.date.slice(0, 7);
+          const head = m !== month ? `<div class="list-group-title">${esc(App.fmtMonth(m))}</div>` : "";
+          month = m;
+          return `${head}<div class="list-item"><div class="grow"><div class="title">${esc(d.dish_name)}</div>
+            <div class="hint">${fmtDate(d.date)} · ${fmtQty(d.portions)} ${esc(t("portions_short"))}</div></div>
+            <div class="amount">${fmtMoney(d.amount)}</div></div>`;
+        }).join("") || App.emptyHtml("📦", "no_deliveries");
+        const pays = inv.payments.map((p) => `<div class="list-item"><div class="grow"><div class="title">💵 ${esc(t(p.payment_type))}</div>
+            <div class="hint">${fmtDate(p.date)}</div></div><div class="amount ok">+${fmtMoney(p.amount)}</div></div>`).join("")
+          || App.emptyHtml("💵", "no_payments");
+        const debtLabel = inv.debt > 0 ? t("debt") : inv.debt < 0 ? t("overpaid") : t("balance_zero");
+        body.innerHTML = `
+          <div class="mini-stats" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+            <div class="mini-stat"><div class="label">${esc(t("charged"))}</div><div class="value">${fmtShort(inv.charged)}</div></div>
+            <div class="mini-stat"><div class="label">${esc(t("paid"))}</div><div class="value">${fmtShort(inv.paid)}</div></div>
+            <div class="mini-stat"><div class="label">${esc(debtLabel)}</div><div class="value ${inv.debt > 0 ? "danger" : "ok"}">${fmtShort(Math.abs(inv.debt))}</div></div>
+          </div>
+          <div class="small muted">${esc(t("explain_client_debt", { charged: fmtMoney(inv.charged), paid: fmtMoney(inv.paid), debt: fmtMoney(inv.debt) }))}</div>
+          <div class="tabs" style="position:static">
+            <button type="button" class="active" data-ct="d">📦 ${esc(t("tab_deliveries"))} · ${items.length}</button>
+            <button type="button" data-ct="p">💵 ${esc(t("tab_payments"))} · ${inv.payments.length}</button>
+          </div>
+          <div class="list" data-cp="d">${list}</div>
+          <div class="list" data-cp="p" hidden>${pays}</div>`;
+        body.querySelectorAll("[data-ct]").forEach((b) => b.addEventListener("click", () => {
+          body.querySelectorAll("[data-ct]").forEach((x) => x.classList.toggle("active", x === b));
+          body.querySelectorAll("[data-cp]").forEach((p) => { p.hidden = p.dataset.cp !== b.dataset.ct; });
+        }));
+      } catch (e) {
+        body.innerHTML = `<div class="error-box">${esc(errorText(e))}</div>`;
+      }
+    }
+
+    // ================= «Откуда эти цифры»: окошко с расчётом по нажатию =================
+    /** Таблица «название — значение» + строка итога */
+    function explainTable(rows, total) {
+      return `<div class="explain-table">${rows.map(([k, v, cls]) =>
+        `<div class="er"><span>${esc(k)}</span><b class="${cls || ""}">${v}</b></div>`).join("")}
+        ${total ? `<div class="er total"><span>${esc(total[0])}</span><b>${total[1]}</b></div>` : ""}</div>`;
+    }
+    const formula = (text) => `<div class="formula">${text}</div>`;
+
+    async function explain(kind) {
+      const s = lastStats;
+      if (!s) return;
+      const cl = s.by_client || [];
+      const period = `<div class="small muted">${esc(t("explain_period"))}: <b>${esc(periodLabel())}</b></div>`;
+      let title = "", html = "";
+      if (kind === "revenue") {
+        title = "💰 " + t("revenue");
+        html = period + `<p>${esc(t("explain_revenue", { n: s.deliveries_count, p: fmtQty(s.portions) }))}</p>`
+          + explainTable(cl.map((c) => [c.client, fmtMoney(c.revenue)]), [t("total"), fmtMoney(s.revenue)]);
+      } else if (kind === "cost") {
+        title = "🧾 " + t("cost");
+        html = period + `<p>${esc(t("explain_cost"))}</p>`
+          + explainTable(cl.map((c) => [c.client, fmtMoney(c.cost)]), [t("total"), fmtMoney(s.cost)]);
+      } else if (kind === "profit") {
+        title = "📈 " + t("profit");
+        html = period + formula(`${esc(t("revenue"))} ${fmtMoney(s.revenue)}<br>− ${esc(t("cost"))} ${fmtMoney(s.cost)}<br>= <b>${fmtMoney(s.profit)}</b>`)
+          + `<p class="small muted">${esc(t("explain_profit_note"))}</p>`
+          + explainTable(cl.map((c) => [c.client, fmtMoney(c.revenue - c.cost)]));
+      } else if (kind === "margin") {
+        title = "🎯 " + t("margin");
+        html = period + formula(`${esc(t("profit"))} ${fmtMoney(s.profit)} ÷ ${esc(t("revenue"))} ${fmtMoney(s.revenue)} × 100 = <b>${s.margin} %</b>`)
+          + `<p class="small muted">${esc(t("explain_margin"))}</p>`;
+      } else if (kind === "debts" || kind === "balance") {
+        title = kind === "debts" ? "🧾 " + t("kpi_debts") : "⚖️ " + t("balance_label");
+        const total = cl.reduce((a, c) => a + (kind === "debts" ? Math.max(0, c.debt) : c.debt), 0);
+        html = `<p>${esc(t(kind === "debts" ? "explain_debts" : "explain_balance"))}</p>`
+          + explainTable(cl.map((c) => [c.client, `${fmtMoney(c.charged_total)} − ${fmtMoney(c.paid_total)} = ${fmtMoney(c.debt)}`, c.debt > 0 ? "danger" : "ok"]),
+            [t("total"), fmtMoney(total)]);
+      } else if (kind === "portions") {
+        title = "🍽 " + t("portions");
+        html = period + `<p>${esc(t("explain_portions", { n: s.deliveries_count }))}</p>`
+          + explainTable(cl.map((c) => [c.client, fmtQty(c.portions)]), [t("total"), fmtQty(s.portions)]);
+      } else if (kind === "purchases") {
+        title = "🛒 " + t("purchases_total");
+        html = period + `<p>${esc(t("explain_purchases", { n: s.purchases_count }))}</p>`
+          + explainTable([], [t("total"), fmtMoney(s.purchases_total)]);
+      } else if (kind === "stock") {
+        title = "📦 " + t("stock_value");
+        let rows = [];
+        try {
+          const stock = await api("/api/stock");
+          rows = stock.filter((p) => p.quantity > 0).sort((a, b) => b.value - a.value).slice(0, 12)
+            .map((p) => [`${p.name} · ${fmtQty(p.quantity)} ${p.unit} × ${fmtMoney(p.price_per_unit)}`, fmtMoney(p.value)]);
+        } catch (e) { /* покажем только итог */ }
+        html = `<p>${esc(t("explain_stock", { n: s.stock_items }))}</p>`
+          + (rows.length ? explainTable(rows, [t("total"), fmtMoney(s.stock_value)]) : `<p class="muted">${esc(t("explain_stock_empty"))}</p>`);
+      }
+      modal({ title, body: `<div class="form">${html}</div>`, actions: [{ label: t("understood"), kind: "secondary" }] });
+    }
+
+    document.querySelectorAll("[data-explain]").forEach((el) => el.addEventListener("click", () => explain(el.dataset.explain)));
+
+    // ================= План / факт / прогноз =================
+    let planMonth = App.today().slice(0, 7);
+    let lastPlan = null;
+
+    function shiftMonth(ym, delta) {
+      const [y, m] = ym.split("-").map(Number);
+      const d = new Date(y, m - 1 + delta, 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    }
+
+    /** Полоса: сплошная часть — факт, штриховка — прогноз, отметка — 100% плана */
+    function bar(factPct, forecastPct) {
+      const f = Math.min(factPct || 0, 130), fc = Math.min(forecastPct || 0, 130);
+      const scale = (v) => (v / 130) * 100;
+      const cls = (forecastPct || 0) >= 100 ? "good" : (forecastPct || 0) >= 85 ? "warn" : "bad";
+      return `<div class="pbar ${cls}"><span class="pfc" style="width:${scale(fc)}%"></span><span class="pfact" style="width:${scale(f)}%"></span><span class="pmark" style="left:${scale(100)}%"></span></div>`;
+    }
+
+    function sourceBadge(src) {
+      return src === "manual" ? `<span class="badge info">✏️ ${esc(t("plan_manual"))}</span>`
+        : src === "auto" ? `<span class="badge">🤖 ${esc(t("plan_auto"))}</span>` : `<span class="badge warning">${esc(t("plan_none"))}</span>`;
+    }
+
+    function renderPlan(p) {
+      lastPlan = p;
+      $("plan-month").textContent = App.fmtMonth(p.month);
+      const pctTxt = (v) => (v == null ? "—" : `${Math.round(v)}%`);
+      const fcCls = (p.forecast_pct || 0) >= 100 ? "ok" : (p.forecast_pct || 0) >= 85 ? "text-warning" : "danger";
+      $("plan-body").innerHTML = `
+        <div class="plan-grid">
+          <div class="plan-cell tappable" data-plan-explain="plan">
+            <div class="label">${esc(t("plan_plan"))} ${sourceBadge(p.plan.source)}</div>
+            <div class="value">${fmtQty(p.plan.portions)} <small>${esc(t("portions_short"))}</small></div>
+            <div class="sub">${fmtMoney(p.plan.revenue)}</div>
+          </div>
+          <div class="plan-cell tappable" data-plan-explain="fact">
+            <div class="label">${esc(t("plan_fact"))} · ${pctTxt(p.fact_pct)}</div>
+            <div class="value">${fmtQty(p.fact.portions)} <small>${esc(t("portions_short"))}</small></div>
+            <div class="sub">${fmtMoney(p.fact.revenue)}</div>
+          </div>
+          <div class="plan-cell tappable" data-plan-explain="forecast">
+            <div class="label">${esc(t("plan_forecast"))} · <span class="${fcCls}">${pctTxt(p.forecast_pct)}</span></div>
+            <div class="value">${fmtQty(p.forecast.portions)} <small>${esc(t("portions_short"))}</small></div>
+            <div class="sub">${fmtMoney(p.forecast.revenue)}</div>
+          </div>
+        </div>
+        ${bar(p.fact_pct, p.forecast_pct)}
+        <div class="small muted" style="margin-top:6px">${esc(t("plan_days", { passed: p.days.passed, total: p.days.total, left: p.days.left }))}</div>
+        <div class="list" style="margin-top:8px">${p.clients.map((c) => `
+          <div class="list-item tappable" data-open-client="${esc(c.client)}" style="flex-direction:column;align-items:stretch;gap:6px">
+            <div style="display:flex;justify-content:space-between;gap:8px">
+              <span class="title">${esc(c.client)}</span>
+              <span class="small">${fmtQty(c.fact.portions)} / ${fmtQty(c.plan.portions)} · <b>${esc(t("plan_forecast_short"))} ${fmtQty(c.forecast.portions)}</b></span>
+            </div>
+            ${bar(c.fact_pct, c.forecast_pct)}
+          </div>`).join("")}</div>`;
+      $("plan-body").querySelectorAll("[data-plan-explain]").forEach((el) => el.addEventListener("click", () => explainPlan(el.dataset.planExplain)));
+      $("plan-body").querySelectorAll("[data-open-client]").forEach((el) => el.addEventListener("click", () => openClient(el.dataset.openClient)));
+    }
+
+    async function loadPlan() {
+      $("plan-month").textContent = App.fmtMonth(planMonth);
+      try { renderPlan(await api("/api/plan", { query: { month: planMonth } })); }
+      catch (e) { $("plan-body").innerHTML = `<div class="error-box">${esc(errorText(e))}</div>`; }
+    }
+
+    function explainPlan(kind = "plan") {
+      const p = lastPlan;
+      if (!p) return;
+      const x = p.explain;
+      const hist = x.history_from ? `${fmtDate(x.history_from)} — ${fmtDate(x.history_to)}` : "—";
+      const blocks = {
+        plan: p.plan.source === "manual"
+          ? `<p>${esc(t("explain_plan_manual"))}</p>`
+          : formula(`${esc(t("explain_plan_auto", { from: hist }))}<br>${fmtQty(x.history_portions)} ${esc(t("portions_short"))} ÷ ${x.history_days} ${esc(t("work_days"))} = <b>${x.history_daily_portions}</b> ${esc(t("per_day"))}<br>× ${p.days.total} ${esc(t("work_days"))} = <b>${fmtQty(p.plan.portions)} ${esc(t("portions_short"))}</b>`),
+        fact: `<p>${esc(t("explain_fact", { n: p.fact.deliveries }))}</p>`
+          + explainTable(p.clients.map((c) => [c.client, `${fmtQty(c.fact.portions)} · ${fmtMoney(c.fact.revenue)}`]), [t("total"), `${fmtQty(p.fact.portions)} · ${fmtMoney(p.fact.revenue)}`]),
+        forecast: formula(p.forecast.pace === "final" ? esc(t("explain_forecast_final"))
+          : `${esc(t("plan_fact"))} ${fmtQty(p.fact.portions)}<br>+ ${p.forecast.pace === "month" ? x.month_daily_portions : x.history_daily_portions} ${esc(t("per_day"))} × ${p.days.left} ${esc(t("work_days_left"))}<br>= <b>${fmtQty(p.forecast.portions)} ${esc(t("portions_short"))}</b>`)
+          + `<p class="small muted">${esc(t(p.forecast.pace === "month" ? "explain_pace_month" : "explain_pace_history"))}</p>`,
+      };
+      const titles = { plan: t("plan_plan"), fact: t("plan_fact"), forecast: t("plan_forecast") };
+      modal({ title: "🎯 " + titles[kind], body: `<div class="form">${blocks[kind]}<p class="small muted">${esc(t("explain_workdays"))}</p></div>`,
+        actions: [{ label: t("understood"), kind: "secondary" }] });
+    }
+
+    function openPlanEditor() {
+      const p = lastPlan;
+      if (!p) return;
+      // Цена порции по умолчанию — средняя из истории (или из факта месяца)
+      const avgPrice = Math.round((p.explain.history_revenue / (p.explain.history_portions || 1)) || (p.fact.revenue / (p.fact.portions || 1)) || 30000);
+      const rows = [["", t("plan_total_kitchen"), p.plan]].concat(p.clients.map((c) => [c.client, c.client, c.plan]));
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = `
+        <p class="small muted">${esc(t("plan_edit_hint", { month: App.fmtMonth(p.month) }))}</p>
+        <div class="field"><label>${esc(t("plan_price"))}</label><input name="price" type="number" inputmode="numeric" min="0" step="any" value="${avgPrice}"></div>
+        ${rows.map(([key, label, pl], i) => `
+          <div class="field"><label>${esc(label)} · ${esc(t("portions_short"))} ${sourceBadge(pl.source)}</label>
+            <input data-plan-key="${esc(key)}" data-i="${i}" type="number" inputmode="numeric" min="0" step="1" value="${pl.portions}"></div>`).join("")}`;
+      modal({
+        title: "✏️ " + t("plan_set"),
+        body,
+        actions: [
+          { label: t("plan_reset"), kind: "secondary", onClick: async () => {
+            for (const [key, , pl] of rows) if (pl.source === "manual") {
+              await api(`/api/plan?month=${p.month}` + (key ? `&client=${encodeURIComponent(key)}` : ""), { method: "DELETE" });
+            }
+            toast(t("saved")); loadPlan();
+          } },
+          { label: t("save"), onClick: async () => {
+            const price = parseFloat(body.querySelector('[name="price"]').value) || 0;
+            let last = null;
+            for (const input of body.querySelectorAll("[data-plan-key]")) {
+              const [key, , pl] = rows[Number(input.dataset.i)];
+              const portions = parseInt(input.value, 10);
+              if (!(portions >= 0) || (portions === pl.portions && pl.source !== "none")) continue;   // не меняли — не трогаем
+              last = await api("/api/plan", { method: "PUT", json: { month: p.month, client: key || null, portions, revenue: portions * price } });
+            }
+            toast(t("saved"));
+            if (last) renderPlan(last); else loadPlan();
+          } },
+        ],
+      });
+    }
+
+    $("plan-prev").addEventListener("click", () => { planMonth = shiftMonth(planMonth, -1); loadPlan(); });
+    $("plan-next").addEventListener("click", () => { planMonth = shiftMonth(planMonth, 1); loadPlan(); });
+    $("plan-edit").addEventListener("click", openPlanEditor);
+    $("plan-how").addEventListener("click", () => explainPlan("forecast"));
+
     // Кнопка «🤝 Клиенты» в боте открывает ?tab=clients — прокручиваем к клиентам
     const startTab = new URLSearchParams(location.search).get("tab");
 
     (async function start() {
-      await Promise.all([loadClientList(), loadStats()]);
+      await Promise.all([loadClientList(), loadStats(), loadPlan()]);
       if (startTab === "clients") $("clients-section").scrollIntoView({ behavior: "smooth", block: "start" });
     })();
   </script>

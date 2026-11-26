@@ -2,19 +2,21 @@
 from __future__ import annotations
 
 import html
+import logging
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, MenuButtonWebApp, Message, WebAppInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.config import get_settings
 from api.database import session_scope
 from api.models import User
-from bot.keyboards import LangCB, RoleCB, lang_keyboard, role_keyboard, role_menu
+from bot.keyboards import LangCB, RoleCB, entry_url, lang_keyboard, role_keyboard, role_menu
 from bot.translations import t
 from bot.utils import can_take_role, effective_role, get_or_create_user, linked_client
 
+log = logging.getLogger(__name__)
 router = Router(name="start")
 
 
@@ -47,6 +49,21 @@ async def cmd_start(message: Message) -> None:
         user = await get_or_create_user(session, message.from_user)
         lang = user.language
     await message.answer(t(lang, "choose_role"), reply_markup=role_keyboard(lang))
+    await set_enter_button(message, lang)
+
+
+async def set_enter_button(message: Message, lang: str) -> None:
+    """Синяя кнопка меню слева от поля ввода → «Войти» (на языке пользователя) и открывает приложение."""
+    url = entry_url(lang)
+    if not url:
+        return
+    try:
+        await message.bot.set_chat_menu_button(
+            chat_id=message.chat.id,
+            menu_button=MenuButtonWebApp(text=t(lang, "btn_enter"), web_app=WebAppInfo(url=url)),
+        )
+    except Exception as exc:  # кнопка — удобство; ошибка Telegram не должна ломать /start
+        log.warning("Could not set menu button: %s", exc)
 
 
 @router.callback_query(F.data == "change_role")
@@ -92,6 +109,7 @@ async def cb_choose_lang(callback: CallbackQuery, callback_data: LangCB) -> None
         lang = user.language
     await callback.message.edit_text(t(lang, "lang_saved"))
     await callback.message.answer(text, reply_markup=kb)
+    await set_enter_button(callback.message, lang)   # подпись «Войти» — на новом языке
     await callback.answer()
 
 

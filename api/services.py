@@ -272,6 +272,14 @@ async def compute_stats(
     if date_to:
         purchases_stmt = purchases_stmt.where(Purchase.date <= date_to)
     purchases_total = (await session.execute(purchases_stmt)).scalar_one()
+    # Количества — для окошек «откуда эти цифры» в приложении
+    purchases_count_stmt = select(func.count()).select_from(Purchase)
+    if date_from:
+        purchases_count_stmt = purchases_count_stmt.where(Purchase.date >= date_from)
+    if date_to:
+        purchases_count_stmt = purchases_count_stmt.where(Purchase.date <= date_to)
+    purchases_count = (await session.execute(purchases_count_stmt)).scalar_one()
+    stock_items = (await session.execute(select(func.count()).select_from(Stock).where(Stock.quantity > 0))).scalar_one()
 
     all_client_names = set(clients) | set(paid_by_client) | set(charged_by_client)
     known = (await session.execute(select(Client.name))).scalars().all()
@@ -286,6 +294,9 @@ async def compute_stats(
         "portions": portions,
         "purchases_total": money(purchases_total),
         "stock_value": money(stock_value),
+        "deliveries_count": len(rows),
+        "purchases_count": purchases_count,
+        "stock_items": stock_items,
         "by_month": [
             {
                 "month": m,
@@ -301,6 +312,7 @@ async def compute_stats(
                     "client": name,
                     "revenue": money(clients[name]["revenue"]) if name in clients else 0.0,
                     "portions": clients[name]["portions"] if name in clients else 0,
+                    "cost": money(clients[name]["cost"]) if name in clients else 0.0,
                     "charged_total": money(charged_by_client.get(name, 0)),
                     "paid_total": money(paid_by_client.get(name, 0)),
                     "debt": money(charged_by_client.get(name, Decimal(0)) - paid_by_client.get(name, Decimal(0))),
@@ -349,4 +361,79 @@ async def client_invoice(session: AsyncSession, client_name: str) -> dict:
         "payments": [
             {"date": p.date.isoformat(), "amount": money(p.amount), "payment_type": p.payment_type} for p in payments
         ],
+    }
+
+
+# ---------------------------------------------------------------- Акт сверки (как в 1С, простыми словами)
+
+async def client_statement(
+    session: AsyncSession, client_name: str, date_from: dt.date | None = None, date_to: dt.date | None = None
+) -> dict:
+    """
+    Движения по клиенту за период — основа акта сверки:
+      долг на начало = все поставки до начала периода − все оплаты до начала периода;
+      строки        = поставки и оплаты периода по датам, после каждой — текущий долг;
+      долг на конец = долг на начало + поставили − оплатили.
+    Положительный долг — клиент должен нам, отрицательный — переплата (аванс).
+    Без дат — весь период работы; итог тогда совпадает со «Счётом» клиента.
+    """
+    opening = Decimal("0")
+    if date_from:
+        before_d = (
+            await session.execute(
+                select(func.coalesce(func.sum(ClientDelivery.amount), 0))
+                .where(ClientDelivery.client_name == client_name, ClientDelivery.date < date_from)
+            )
+        ).scalar_one()
+        before_p = (
+            await session.execute(
+                select(func.coalesce(func.sum(Payment.amount), 0))
+                .where(Payment.client_name == client_name, Payment.date < date_from)
+            )
+        ).scalar_one()
+        opening = Decimal(before_d) - Decimal(before_p)
+
+    d_stmt = select(ClientDelivery).where(ClientDelivery.client_name == client_name)
+    p_stmt = select(Payment).where(Payment.client_name == client_name)
+    if date_from:
+        d_stmt, p_stmt = d_stmt.where(ClientDelivery.date >= date_from), p_stmt.where(Payment.date >= date_from)
+    if date_to:
+        d_stmt, p_stmt = d_stmt.where(ClientDelivery.date <= date_to), p_stmt.where(Payment.date <= date_to)
+    deliveries = (await session.execute(d_stmt)).scalars().all()
+    payments = (await session.execute(p_stmt)).scalars().all()
+
+    # В один день сначала поставка, потом оплата — так «долг после» читается естественно
+    ops = [(d.date, 0, d.id or 0, "delivery", d) for d in deliveries] + [(p.date, 1, p.id or 0, "payment", p) for p in payments]
+    ops.sort(key=lambda x: (x[0], x[1], x[2]))
+
+    balance = opening
+    rows: list[dict] = []
+    delivered = paid = Decimal("0")
+    portions = 0
+    for date, _, _, kind, obj in ops:
+        amount = Decimal(obj.amount or 0)
+        if kind == "delivery":
+            balance += amount
+            delivered += amount
+            portions += int(obj.portions or 0)
+            rows.append({"date": date, "kind": kind, "dish": obj.dish_name, "portions": int(obj.portions or 0),
+                         "delivered": amount, "paid": None, "balance": balance})
+        else:
+            balance -= amount
+            paid += amount
+            rows.append({"date": date, "kind": kind, "payment_type": obj.payment_type,
+                         "delivered": None, "paid": amount, "balance": balance})
+
+    period_from = date_from or (rows[0]["date"] if rows else dt.date.today())
+    period_to = date_to or (rows[-1]["date"] if rows else dt.date.today())
+    return {
+        "client": client_name,
+        "date_from": period_from,
+        "date_to": period_to,
+        "opening": opening,
+        "rows": rows,
+        "delivered": delivered,
+        "paid": paid,
+        "portions": portions,
+        "closing": opening + delivered - paid,
     }

@@ -43,11 +43,20 @@ def _webapp_button(text: str, role: str, lang: str, tab: str | None = None) -> I
     return InlineKeyboardButton(text=text, web_app=WebAppInfo(url=url))
 
 
+def entry_url(lang: str) -> str | None:
+    """Экран «Войти» Mini App: сам ведёт на экран роли или предлагает выбрать роль."""
+    base = get_settings().webapp_url
+    return f"{base}/app?lang={lang}" if base else None
+
+
 def role_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    url = entry_url(lang)
+    if url:  # первой — большая кнопка входа в приложение
+        kb.row(InlineKeyboardButton(text=t(lang, "btn_enter_app"), web_app=WebAppInfo(url=url)))
     for role in ("owner", "cook", "purchaser", "client"):
         kb.button(text=t(lang, f"role_{role}"), callback_data=RoleCB(role=role))
-    kb.adjust(2)
+    kb.adjust(1, 2, 2) if url else kb.adjust(2)
     return kb.as_markup()
 
 

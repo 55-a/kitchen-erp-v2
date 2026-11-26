@@ -22,6 +22,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -158,3 +159,24 @@ class ReceiptDraft(Base):
     # Список позиций: [{name, quantity, unit, total_price, product_id, status}]
     items: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SalesPlan(Base):
+    """
+    План продаж на месяц, заданный владельцем вручную.
+    client_name = "" — план по кухне в целом; иначе — по конкретному клиенту.
+    Нет записи — план считается автоматически по средним продажам (api/plan.py).
+    """
+
+    __tablename__ = "sales_plans"
+    __table_args__ = (UniqueConstraint("month", "client_name", name="uq_sales_plan_month_client"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    month: Mapped[dt.date] = mapped_column(Date, index=True)          # первое число месяца
+    client_name: Mapped[str] = mapped_column(String(255), default="")
+    portions: Mapped[int] = mapped_column(Integer, default=0)
+    revenue: Mapped[Decimal] = mapped_column(Money, default=Decimal("0"))
+    created_by: Mapped[int | None] = mapped_column(BigInteger)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

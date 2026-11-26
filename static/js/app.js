@@ -363,11 +363,16 @@
     bar.className = "top-tools";
     bar.innerHTML = `
       <span class="brand">Kuxnya <b>NVGR</b> ✦</span>
+      <button type="button" class="tool-btn" data-tool="role" aria-label="${esc(I18N.t("switch_role"))}">👤</button>
       <button type="button" class="tool-btn" data-tool="support" hidden>💬 <span>${esc(I18N.t("support"))}</span></button>
       <button type="button" class="tool-btn" data-tool="lang" aria-label="${esc(I18N.t("language"))}">${current.flag} <span>${current.short}</span></button>`;
     app.prepend(bar);
     bar.querySelector('[data-tool="lang"]').addEventListener("click", openLanguagePicker);
     bar.querySelector('[data-tool="support"]').addEventListener("click", openSupport);
+    // «Сменить роль» — экран входа с выбором роли
+    bar.querySelector('[data-tool="role"]').addEventListener("click", () => {
+      location.href = `/app?choose=1&lang=${encodeURIComponent(I18N.lang)}`;
+    });
     // Контакт поддержки задаётся на сервере (SUPPORT_TELEGRAM); нет контакта или нет доступа — кнопки нет
     api("/api/me").then((me) => {
       supportUrl = me.support_url;

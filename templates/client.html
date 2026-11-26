@@ -36,17 +36,17 @@
 
     <!-- 3 карточки: начислено, оплачено, долг/переплата (цвет зависит от знака) -->
     <section class="kpi-grid">
-      <div class="kpi">
+      <div class="kpi tappable" data-explain="charged">
         <div class="icon">🧾</div>
         <div class="label" data-i18n="charged"></div>
         <div class="value" id="i-charged"><div class="skeleton line"></div></div>
       </div>
-      <div class="kpi success">
+      <div class="kpi success tappable" data-explain="paid">
         <div class="icon">💵</div>
         <div class="label" data-i18n="paid"></div>
         <div class="value" id="i-paid"><div class="skeleton line"></div></div>
       </div>
-      <div class="kpi wide" id="debt-card">
+      <div class="kpi wide tappable" id="debt-card" data-explain="debt">
         <div class="icon">⚖️</div>
         <div class="label" id="debt-label" data-i18n="debt"></div>
         <div class="value" id="i-debt"><div class="skeleton line"></div></div>
@@ -109,6 +109,7 @@
       $("payments").innerHTML = App.skeletonHtml(2);
       try {
         const inv = await api("/api/client/invoice", { query: scope });
+        lastInvoice = inv;
         setClientName(inv.client);
         $("i-charged").textContent = fmtMoney(inv.charged);
         $("i-paid").textContent = fmtMoney(inv.paid);
@@ -225,6 +226,22 @@
 
     // Сначала узнаём, владелец ли это (и какую компанию показать), потом грузим данные.
     // Счёт и поставки грузятся один раз: они нужны и карточкам, и шапке; вкладки только переключают вид.
+    // ---------- «Откуда эти цифры»: окошко с расчётом по нажатию на карточку ----------
+    let lastInvoice = null;
+    document.querySelectorAll("[data-explain]").forEach((el) => el.addEventListener("click", () => {
+      const inv = lastInvoice;
+      if (!inv) return;
+      const kind = el.dataset.explain;
+      const text = kind === "charged" ? t("explain_charged", { n: $("d-total").textContent })
+        : kind === "paid" ? t("explain_paid", { n: inv.payments.length })
+        : t("explain_client_debt", { charged: fmtMoney(inv.charged), paid: fmtMoney(inv.paid), debt: fmtMoney(inv.debt) });
+      App.modal({
+        title: kind === "charged" ? "🧾 " + t("charged") : kind === "paid" ? "💵 " + t("paid") : "⚖️ " + $("debt-label").textContent,
+        body: `<div class="form"><div class="formula">${esc(text)}</div><p class="small muted">${esc(t("explain_client_tabs"))}</p></div>`,
+        actions: [{ label: t("understood"), kind: "secondary" }],
+      });
+    }));
+
     initOwnerPicker().finally(() => {
       loadInvoice();
       loadDeliveries();

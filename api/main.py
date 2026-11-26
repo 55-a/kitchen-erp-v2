@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from api.auth import TelegramAuthMiddleware
 from api.config import get_settings
 from api.database import init_db
-from api.routers import ai, batch, client, me, purchase, recipes, stats, stock
+from api.routers import ai, batch, client, me, plan, purchase, recipes, stats, stock
 from api.services import ServiceError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Kuxnya NVGR ERP", version="1.0.0", lifespan=lifespan)
 app.add_middleware(TelegramAuthMiddleware)
 
-for r in (stats, stock, recipes, batch, purchase, ai, client, me):
+for r in (stats, stock, recipes, batch, purchase, ai, client, me, plan):
     app.include_router(r.router)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -92,7 +92,13 @@ async def health() -> dict:
 
 @app.get("/")
 async def root() -> RedirectResponse:
-    return RedirectResponse("/app/client")
+    return RedirectResponse("/app")
+
+
+@app.get("/app")
+async def mini_app_entry() -> FileResponse:
+    """Экран «Войти»: кнопка меню бота открывает его, дальше — экран своей роли или выбор роли."""
+    return FileResponse(TEMPLATES_DIR / "index.html", media_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/app/{role}")

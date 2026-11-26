@@ -14,7 +14,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand, ErrorEvent
+from aiogram.types import BotCommand, ErrorEvent, MenuButtonWebApp, WebAppInfo
 
 from api.config import get_settings
 from api.database import init_db
@@ -71,6 +71,11 @@ async def set_commands(bot: Bot) -> None:
             BotCommand(command="help", description=d_help),
         ]
         await bot.set_my_commands(commands, language_code=None if lang == "ru" else lang)
+
+    # Кнопка меню по умолчанию — «Войти» в Mini App (у каждого чата после /start — на его языке)
+    base = get_settings().webapp_url
+    if base:
+        await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Войти", web_app=WebAppInfo(url=f"{base}/app")))
 
 
 async def run_polling() -> None:

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <title>Kuxnya NVGR</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <!--
+    Экран «Войти». Его открывает синяя кнопка меню бота.
+    Если роль уже выбрана — сразу переходим на её экран; если нет (или нажали «Сменить роль»,
+    ?choose=1) — показываем карточки ролей. Права проверяет сервер: POST /api/me/role.
+  -->
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <div class="hello" id="hello">👋 Kuxnya NVGR</div>
+        <div class="subtitle" data-i18n="enter_subtitle"></div>
+      </div>
+    </header>
+
+    <div id="loading" class="card" style="text-align:center">
+      <span class="spinner" style="border-color:rgba(255,255,255,.2);border-top-color:#8b5cf6"></span>
+    </div>
+
+    <section class="section" id="roles" hidden>
+      <div class="section-title" data-i18n="choose_role_title"></div>
+      <div class="role-grid">
+        <button type="button" class="role-card" data-role="owner"><span class="r-icon">👑</span><span class="r-name" data-i18n="role_owner_name"></span><span class="r-hint" data-i18n="role_owner_hint"></span></button>
+        <button type="button" class="role-card" data-role="cook"><span class="r-icon">👨‍🍳</span><span class="r-name" data-i18n="role_cook_name"></span><span class="r-hint" data-i18n="role_cook_hint"></span></button>
+        <button type="button" class="role-card" data-role="purchaser"><span class="r-icon">🛒</span><span class="r-name" data-i18n="role_purchaser_name"></span><span class="r-hint" data-i18n="role_purchaser_hint"></span></button>
+        <button type="button" class="role-card" data-role="client"><span class="r-icon">🤝</span><span class="r-name" data-i18n="role_client_name"></span><span class="r-hint" data-i18n="role_client_hint"></span></button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/js/i18n.js"></script>
+  <script src="/static/js/app.js"></script>
+  <script>
+    "use strict";
+    App.init();
+    const { api, tg, esc, toast, showError } = App;
+    const t = I18N.t;
+    const $ = (id) => document.getElementById(id);
+    const params = new URLSearchParams(location.search);
+    const ROLES = ["owner", "cook", "purchaser", "client"];
+
+    /** Переход на экран роли с сохранением языка */
+    function go(role) {
+      location.replace(`/app/${role}?lang=${encodeURIComponent(I18N.lang)}`);
+    }
+
+    function showRoles(current) {
+      $("loading").hidden = true;
+      $("roles").hidden = false;
+      document.querySelectorAll(".role-card").forEach((c) => c.classList.toggle("active", c.dataset.role === current));
+    }
+
+    (async function start() {
+      const name = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.first_name : "";
+      if (name) $("hello").textContent = `👋 ${t("greet_hello")}, ${name}`;
+      let me = null;
+      try { me = await api("/api/me"); } catch (e) { /* вне Telegram — просто покажем роли */ }
+      if (me && me.role && ROLES.includes(me.role) && !params.get("choose")) return go(me.role);
+      showRoles(me && me.role);
+    })();
+
+    $("roles").addEventListener("click", async (ev) => {
+      const card = ev.target.closest("[data-role]");
+      if (!card || card.disabled) return;
+      document.querySelectorAll(".role-card").forEach((c) => { c.disabled = true; });
+      card.classList.add("active");
+      try {
+        await api("/api/me/role", { json: { role: card.dataset.role } });   // права проверяет сервер
+        go(card.dataset.role);
+      } catch (e) {
+        toast(e.status === 403 ? t("role_not_allowed") : App.errorText(e), "error");
+        document.querySelectorAll(".role-card").forEach((c) => { c.disabled = false; c.classList.remove("active"); });
+      }
+    });
+  </script>
+</body>
+</html>
