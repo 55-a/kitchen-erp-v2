@@ -67,7 +67,7 @@
     }
     const type = resp.headers.get("Content-Type") || "";
     if (type.includes("application/json")) return resp.json();
-    if (type.includes("application/pdf")) return resp.blob();
+    if (type.includes("application/pdf") || type.startsWith("image/")) return resp.blob();
     return resp.text();
   }
 
@@ -80,6 +80,9 @@
     const d = err.detail;
     if (d && typeof d === "object" && d.code) {
       let text = I18N.has("err_" + d.code) ? t("err_" + d.code) : d.message || t("error");
+      if (d.code === "no_price" && Array.isArray(d.products)) {
+        text += ":\n" + d.products.map((p) => `• ${p}`).join("\n");
+      }
       if (d.code === "insufficient_stock" && Array.isArray(d.shortages)) {
         text += ":\n" + d.shortages.map((s) => `• ${s.product}: ${fmtQty(s.need)} / ${fmtQty(s.available)} ${s.unit}`).join("\n");
       }
@@ -380,6 +383,78 @@
     }).catch(() => {});
   }
 
+  // ---------- Справочник сырья: «+ Новый товар» (закупщик, повар, техкарты) ----------
+  const UNIT_OPTIONS = ["kg", "g", "l", "ml", "pcs", "пучок", "пачка"];
+  const CATEGORY_KEYS = ["meat", "veg", "grain", "dairy", "oil", "spice", "bakery", "pack", "other"];
+  const CATEGORY_ICONS = { meat: "🥩", veg: "🥕", grain: "🌾", dairy: "🥛", oil: "🫒", spice: "🧂", bakery: "🍞", pack: "📦", other: "🧺" };
+
+  /** Угадываем категорию по названию (можно поменять вручную) */
+  const CATEGORY_RULES = [
+    ["meat", /мяс|говя|баран|курдюк|фарш|кур|филе|печен|колбас|сосис|go'sht|tovuq|chicken|beef|meat|肉|鸡/i],
+    ["veg", /лук|морков|картош|картоф|капуст|перец|помидор|томат|огур|свёкл|свекл|редьк|чеснок|зелен|укроп|петруш|сельдер|тыкв|баклаж|кабач|piyoz|sabzi|kartosh|onion|carrot|potato|tomato|veg|菜|葱|萝卜/i],
+    ["grain", /рис|греч|перлов|макарон|спагет|лапш|мук|горох|нахат|мош|фасол|чечев|крупа|guruch|un|rice|flour|pasta|米|面/i],
+    ["dairy", /молок|сметан|сливк|сыр|творог|кефир|йогурт|масло слив|qatiq|sut|milk|cheese|cream|奶/i],
+    ["oil", /масло|маргарин|жир|yog'|oil|油/i],
+    ["spice", /соль|сахар|зира|перец молот|специ|приправ|лавров|паприк|кориандр|tuz|salt|sugar|spice|盐|糖/i],
+    ["bakery", /нон|хлеб|лепёш|лепеш|булк|тесто|non|bread|面包/i],
+    ["pack", /упаков|контейнер|пакет|ложк|вилк|салфет|коробк|plastic|box|pack|盒/i],
+  ];
+  function guessCategory(name) {
+    const hit = CATEGORY_RULES.find(([, re]) => re.test(String(name || "")));
+    return hit ? hit[0] : "other";
+  }
+
+  /**
+   * Окно «+ Новый товар». Возвращает Promise с товаром из справочника (или null, если закрыли).
+   * Если такой товар уже есть (409) — возвращает существующий, а не создаёт дубль.
+   */
+  function createProduct({ name = "", unit = "kg" } = {}) {
+    return new Promise((resolve) => {
+      let created = null;
+      const t = I18N.t;
+      const body = document.createElement("div");
+      body.className = "form";
+      const u = UNIT_OPTIONS.includes(unit) ? unit : "kg";
+      body.innerHTML = `
+        <p class="small muted">${esc(t("new_product_hint"))}</p>
+        <div class="field"><label>${esc(t("product_name"))}</label><input name="name" maxlength="255" value="${esc(name)}" autocomplete="off"></div>
+        <div class="row">
+          <div class="field"><label>${esc(t("unit"))}</label>
+            <select name="unit">${UNIT_OPTIONS.map((x) => `<option value="${x}" ${x === u ? "selected" : ""}>${esc(t("unit_" + x))}</option>`).join("")}</select></div>
+          <div class="field"><label>${esc(t("category"))}</label>
+            <select name="category">${CATEGORY_KEYS.map((c) => `<option value="${c}">${CATEGORY_ICONS[c]} ${esc(t("cat_" + c))}</option>`).join("")}</select></div>
+        </div>`;
+      const nameEl = body.querySelector('[name="name"]');
+      const catEl = body.querySelector('[name="category"]');
+      catEl.value = guessCategory(name);
+      let catTouched = false;
+      catEl.addEventListener("change", () => { catTouched = true; });
+      nameEl.addEventListener("input", () => { if (!catTouched) catEl.value = guessCategory(nameEl.value); });
+      modal({
+        title: "➕ " + t("new_product"),
+        body,
+        onClose: () => resolve(created),
+        actions: [
+          { label: t("cancel"), kind: "secondary" },
+          { label: t("add_to_catalog"), onClick: async () => {
+            const payload = { name: nameEl.value.trim(), unit: body.querySelector('[name="unit"]').value, category: catEl.value };
+            if (payload.name.length < 2) { nameEl.classList.add("invalid"); toast(t("product_name_required"), "error"); return false; }
+            try {
+              created = await api("/api/stock", { json: payload });
+              toast(t("product_created", { name: created.name }));
+            } catch (e) {
+              if (e.status === 409 && e.detail && e.detail.product) {     // уже есть — берём существующий
+                created = e.detail.product;
+                toast(t("product_exists_picked", { name: created.name }), "warning");
+              } else { throw e; }
+            }
+          } },
+        ],
+      });
+      setTimeout(() => nameEl.focus(), 350);
+    });
+  }
+
   /** Общая инициализация страницы */
   function init() {
     if (tg) {
@@ -401,5 +476,6 @@
   window.App = {
     tg, api, ApiError, errorText, fmtMoney, fmtQty, fmtDate, fmtMonth, fmtShort, today, esc, toast, showError,
     initTabs, init, modal, confirm: confirmDialog, initials, emptyHtml, skeletonHtml, setupCharts, chartGradient,
+    createProduct, guessCategory, UNIT_OPTIONS, CATEGORY_KEYS, CATEGORY_ICONS,
   };
 })();

@@ -12,7 +12,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models import Batch, Client, ClientDelivery, Payment, Purchase, Recipe, Stock
+from api.models import Batch, BatchItem, Client, ClientDelivery, Payment, Purchase, Recipe, Stock
 from api.units import UnitMismatch, convert, normalize_unit
 
 ALLOWED_PAYMENT_METHODS = {"cash", "card", "transfer"}
@@ -142,10 +142,15 @@ async def create_batch(
     actual_yield: Decimal | None,
     date: dt.date,
     created_by: int | None,
+    items: list[dict] | None = None,
 ) -> tuple[Batch, list[dict]]:
     """
-    Создаёт партию и списывает продукты со склада пропорционально плановому выходу.
-    Если какого-то продукта не хватает — ничего не списывает и возвращает 400 со списком.
+    Создаёт партию и списывает продукты со склада.
+    items — фактический расход от повара: [{product_id, quantity}] в единицах склада.
+    Без items — по техкарте, пропорционально плановому выходу.
+    Блокируется (400), если чего-то не хватает или у продукта ещё нет цены — иначе
+    себестоимость партии была бы неверной (правило из архитектуры).
+    Фактический расход каждого продукта сохраняется в batch_items.
     """
     if planned_yield is None or planned_yield <= 0:
         raise ServiceError(400, "bad_yield", "Плановый выход должен быть больше нуля")
@@ -167,15 +172,44 @@ async def create_batch(
     ).scalars().all()
     stock_by_id = {p.id: p for p in locked}
 
-    need: dict[int, Decimal] = defaultdict(Decimal)
+    # По техкарте (план) — для сравнения с фактом
+    planned: dict[int, Decimal] = defaultdict(Decimal)
     for ing in recipe.ingredients:
         product = stock_by_id[ing.product_id]
         try:
-            need[product.id] += convert(Decimal(ing.quantity) * factor, ing.unit, product.unit)
+            planned[product.id] += convert(Decimal(ing.quantity) * factor, ing.unit, product.unit)
         except UnitMismatch:
             raise ServiceError(
                 400, "unit_mismatch", f"Ингредиент «{product.name}»: {ing.unit} ≠ {product.unit}"
             )
+
+    if items:
+        # Фактический расход от повара: можно поправить количество и добавить продукт не из техкарты
+        extra_ids = sorted({int(i["product_id"]) for i in items} - set(stock_by_id))
+        if extra_ids:
+            extra = (
+                await session.execute(select(Stock).where(Stock.id.in_(extra_ids)).order_by(Stock.id).with_for_update())
+            ).scalars().all()
+            stock_by_id.update({p.id: p for p in extra})
+        need: dict[int, Decimal] = defaultdict(Decimal)
+        for i in items:
+            pid = int(i["product_id"])
+            if pid not in stock_by_id:
+                raise ServiceError(400, "product_not_found", "Товар не найден в справочнике")
+            amount = Decimal(str(i["quantity"]))
+            if amount < 0:
+                raise ServiceError(400, "bad_quantity", "Расход не может быть отрицательным")
+            need[pid] += amount
+        need = {pid: a for pid, a in need.items() if a > 0}
+        if not need:
+            raise ServiceError(400, "recipe_empty", "Не указан расход продуктов")
+    else:
+        need = dict(planned)
+
+    no_price = [stock_by_id[pid].name for pid in need if not Decimal(stock_by_id[pid].price_per_unit or 0)]
+    if no_price:
+        raise ServiceError(400, "no_price", "У продуктов нет цены — внесите закупку или цену в инвентаризации",
+                           {"products": no_price})
 
     shortages = [
         {
@@ -192,17 +226,22 @@ async def create_batch(
 
     consumed: list[dict] = []
     total_cost = Decimal("0")
+    lines: list[BatchItem] = []
     for pid, amount in need.items():
         product = stock_by_id[pid]
         product.quantity = Decimal(product.quantity) - amount
         line_cost = amount * Decimal(product.price_per_unit or 0)
         total_cost += line_cost
         consumed.append(
-            {"product": product.name, "quantity": qty(amount), "unit": product.unit, "cost": money(line_cost)}
+            {"product": product.name, "quantity": qty(amount), "unit": product.unit, "cost": money(line_cost),
+             "planned": qty(planned[pid]) if pid in planned else None}
         )
+        lines.append(BatchItem(product_id=pid, product_name=product.name, quantity=amount, unit=product.unit,
+                               planned_quantity=planned.get(pid), cost=line_cost.quantize(Decimal("0.01"))))
 
     batch = Batch(
         recipe_id=recipe.id,
+        recipe_version=recipe.version or 1,
         planned_yield=Decimal(planned_yield),
         actual_yield=Decimal(actual_yield) if actual_yield is not None else None,
         cost=total_cost.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
@@ -210,6 +249,10 @@ async def create_batch(
         created_by=created_by,
     )
     session.add(batch)
+    await session.flush()
+    for line in lines:
+        line.batch_id = batch.id
+        session.add(line)
     await session.flush()
     return batch, consumed
 

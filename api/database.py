@@ -72,6 +72,36 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_add_missing_columns)
+
+
+# Колонки, добавленные в уже существующие таблицы после первого запуска.
+# create_all создаёт только новые таблицы, поэтому недостающие колонки добавляем сами:
+# ALTER TABLE ... ADD COLUMN с DEFAULT — существующие строки получают значение по умолчанию,
+# старые данные не меняются. Работает и в PostgreSQL, и в SQLite.
+NEW_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "stock": [("category", "VARCHAR(30) DEFAULT 'other'")],
+    "recipes": [
+        ("category", "VARCHAR(30) DEFAULT 'main'"),
+        ("shelf_life_hours", "INTEGER DEFAULT 24"),
+        ("version", "INTEGER DEFAULT 1"),
+    ],
+    "batches": [("recipe_version", "INTEGER")],
+}
+
+
+def _add_missing_columns(sync_conn) -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(sync_conn)
+    tables = set(inspector.get_table_names())
+    for table, columns in NEW_COLUMNS.items():
+        if table not in tables:
+            continue
+        existing = {c["name"] for c in inspector.get_columns(table)}
+        for name, ddl in columns:
+            if name not in existing:
+                sync_conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {ddl}'))
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

@@ -945,3 +945,37 @@ th.right, td.right { text-align: right; }
 @media (max-width: 400px) {
   .plan-grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- 25. Повар: партия, техкарты, сырьё, инвентаризация ---------- */
+.quick-actions.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 380px) { .quick-actions.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Строка расхода / ингредиента: название слева, поле справа */
+.usage-list { display: flex; flex-direction: column; gap: 8px; }
+.usage-row {
+  display: grid; grid-template-columns: 1fr auto; gap: 8px 10px; align-items: center;
+  padding: 10px 12px; border-radius: var(--radius);
+  background: rgba(51, 65, 85, 0.35); border: 1px solid var(--border);
+}
+.usage-row.short { border-color: rgba(239, 68, 68, 0.6); background: var(--danger-soft); }
+.usage-row .u-name { min-width: 0; }
+.usage-row .u-name b { font-weight: 600; }
+.usage-row .u-input { display: flex; align-items: center; gap: 6px; }
+.usage-row .u-input input { width: 96px; min-height: 44px; padding: 8px 10px; text-align: right; font-variant-numeric: tabular-nums; }
+.usage-row .u-input select { width: auto; min-height: 44px; padding: 8px 30px 8px 10px; font-size: 15px; background-position: right 10px center; }
+.usage-row .u-input input.changed { border-color: var(--warning); box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18); }
+.usage-row .u-unit { min-width: 30px; color: var(--text-muted); font-size: 14px; }
+.usage-row .u-price { grid-column: 1 / -1; }
+.usage-row .u-price input { min-height: 44px; font-size: 15px; }
+.icon-btn.small { width: 44px; height: 44px; font-size: 15px; }
+
+/* Фото блюда */
+.recipe-card .emoji.has-photo { width: 100%; height: 96px; border-radius: 14px; overflow: hidden; padding: 0; }
+.recipe-card .emoji img, .recipe-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.recipe-hero {
+  width: 100%; height: 180px; border-radius: var(--radius-lg); overflow: hidden;
+  display: grid; place-items: center; font-size: 64px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(139, 92, 246, 0.12));
+}
+.recipe-hero.small { height: 140px; font-size: 40px; }
+.photo-pick { display: flex; flex-direction: column; gap: 8px; }

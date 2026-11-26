@@ -143,6 +143,7 @@
         stock = await api("/api/stock");
         const prev = $("product").value;
         $("product").innerHTML = `<option value="">${esc(t("choose_product"))}</option>` +
+          `<option value="__new">＋ ${esc(t("new_product"))}…</option>` +
           stock.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
         if (prev) $("product").value = prev;
         updateProductHint();
@@ -183,7 +184,15 @@
         : "";
     }
 
-    $("product").addEventListener("change", () => {
+    $("product").addEventListener("change", async () => {
+      // «＋ Новый товар…» — создаём товар в справочнике сырья и сразу выбираем его
+      if ($("product").value === "__new") {
+        $("product").value = "";
+        const created = await App.createProduct({ unit: $("unit").value });
+        if (!created) return;
+        await loadStock();
+        $("product").value = String(created.id);
+      }
       const p = stock.find((x) => String(x.id) === $("product").value);
       if (p) {
         if (UNITS.includes(p.unit)) $("unit").value = p.unit;
@@ -287,6 +296,7 @@
       $("ai-items").innerHTML = aiItems.map((i, idx) => {
         const done = i.state === "added";
         const options = `<option value="">${esc(t("not_matched"))}</option>` +
+          (i.product_id ? "" : `<option value="__new">＋ ${esc(t("create_named", { name: i.name }))}</option>`) +
           stock.map((p) => `<option value="${p.id}" ${p.id === i.product_id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
         return `
           <div class="check-item ${i.checked && !done ? "selected" : ""} ${done ? "done" : ""}">
@@ -314,9 +324,19 @@
       if (activeTab === "photo") updateMainButton();
     }
 
-    $("ai-items").addEventListener("change", (ev) => {
+    $("ai-items").addEventListener("change", async (ev) => {
       const c = ev.target.dataset.check, p = ev.target.dataset.product;
       if (c !== undefined) { aiItems[c].checked = ev.target.checked; }
+      if (p !== undefined && ev.target.value === "__new") {
+        // Товара из чека нет в справочнике — создаём его (название и единица из чека) и привязываем
+        const item = aiItems[p];
+        const created = await App.createProduct({ name: item.name, unit: UNITS.includes(item.unit) ? item.unit : "pcs" });
+        if (created) {
+          await loadStock();
+          item.product_id = created.id; item.checked = true; item.error = "";
+        }
+        return renderAiItems();
+      }
       if (p !== undefined) {
         const id = Number(ev.target.value) || null;
         aiItems[p].product_id = id;

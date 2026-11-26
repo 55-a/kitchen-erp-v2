@@ -15,6 +15,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
+    LargeBinary,
     BigInteger,
     Date,
     DateTime,
@@ -64,6 +65,8 @@ class Stock(Base):
     unit: Mapped[str] = mapped_column(String(20), default="kg")
     quantity: Mapped[Decimal] = mapped_column(Qty, default=Decimal("0"))
     price_per_unit: Mapped[Decimal] = mapped_column(Money, default=Decimal("0"))
+    # Категория сырья в справочнике: meat, veg, grain, dairy, oil, spice, bakery, pack, other
+    category: Mapped[str | None] = mapped_column(String(30), default="other")
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -76,6 +79,11 @@ class Recipe(Base):
     name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     # Базовый выход закладки (в порциях), на который рассчитаны ингредиенты
     base_yield: Mapped[Decimal] = mapped_column(Qty, default=Decimal("1"))
+    # Категория блюда (first, main, garnish, bakery, salad, other), срок годности готового блюда
+    # и версия техкарты: каждое изменение состава увеличивает версию, старые партии хранят свой расход
+    category: Mapped[str | None] = mapped_column(String(30), default="main")
+    shelf_life_hours: Mapped[int | None] = mapped_column(Integer, default=24)
+    version: Mapped[int | None] = mapped_column(Integer, default=1)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     ingredients: Mapped[list["RecipeIngredient"]] = relationship(
@@ -145,6 +153,7 @@ class Batch(Base):
     # Себестоимость списанных продуктов на момент партии
     cost: Mapped[Decimal] = mapped_column(Money, default=Decimal("0"))
     date: Mapped[dt.date] = mapped_column(Date, index=True)
+    recipe_version: Mapped[int | None] = mapped_column(Integer)
     created_by: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -180,3 +189,53 @@ class SalesPlan(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class RecipePhoto(Base):
+    """Фото блюда для карточки техкарты и PDF рецептов (сжатое на телефоне до ~1280px)."""
+
+    __tablename__ = "recipe_photos"
+
+    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipes.id", ondelete="CASCADE"), primary_key=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    mime: Mapped[str] = mapped_column(String(50), default="image/jpeg")
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class StockAdjustment(Base):
+    """
+    Изменение остатка не закупкой и не партией: инвентаризация (пересчёт склада).
+    Хранится было/стало/разница — расхождения видны владельцу.
+    """
+
+    __tablename__ = "stock_adjustments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("stock.id", ondelete="CASCADE"), index=True)
+    product_name: Mapped[str] = mapped_column(String(255))
+    old_quantity: Mapped[Decimal] = mapped_column(Qty)
+    new_quantity: Mapped[Decimal] = mapped_column(Qty)
+    delta: Mapped[Decimal] = mapped_column(Qty)
+    unit: Mapped[str] = mapped_column(String(20))
+    price_per_unit: Mapped[Decimal] = mapped_column(Money, default=Decimal("0"))
+    reason: Mapped[str] = mapped_column(String(30), default="inventory")
+    date: Mapped[dt.date] = mapped_column(Date, index=True)
+    created_by: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BatchItem(Base):
+    """Фактический расход продукта в партии (повар может поправить количество против техкарты)."""
+
+    __tablename__ = "batch_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("batches.id", ondelete="CASCADE"), index=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("stock.id", ondelete="SET NULL"))
+    product_name: Mapped[str] = mapped_column(String(255))
+    quantity: Mapped[Decimal] = mapped_column(Qty)            # в единицах склада
+    unit: Mapped[str] = mapped_column(String(20))
+    planned_quantity: Mapped[Decimal | None] = mapped_column(Qty)   # по техкарте
+    cost: Mapped[Decimal] = mapped_column(Money, default=Decimal("0"))

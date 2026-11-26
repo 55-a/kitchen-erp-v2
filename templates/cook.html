@@ -10,10 +10,13 @@
 </head>
 <body>
   <!--
-    Экран повара: рецепты карточками → модальное окно с ингредиентами →
-    «Создать партию» с подтверждением → POST /api/batch.
-    Сервер списывает продукты атомарно; если чего-то не хватает — 400 insufficient_stock
-    со списком нехватки, который показывается пользователю.
+    Экран повара (этап 1 «кухонного цикла»):
+    - «Сегодня»: партии за день, «Новая партия», «Повторить вчерашнюю»;
+      в партии повар подтверждает ФАКТИЧЕСКИЙ расход каждого продукта и реальный выход порций;
+    - «Сырьё»: справочник продуктов (поиск, категории, «+ Новый товар», переименование);
+    - «Инвентаризация»: фактические остатки склада (и цена для новых товаров);
+    - «Техкарты»: создание и изменение рецептов, фото, срок годности, версии.
+    Партия блокируется сервером, если продукта не хватает или у него нет цены.
   -->
   <main class="app">
     <header class="topbar">
@@ -27,20 +30,36 @@
       </div>
     </header>
 
-    <div class="search">
-      <input id="search" type="search" autocomplete="off" data-i18n-placeholder="search_recipe">
-    </div>
+    <!-- ===== Главные действия повара ===== -->
+    <section class="quick-actions four">
+      <button type="button" class="quick-action" id="qa-today"><span class="qa-icon">🍳</span><span data-i18n="qa_today"></span></button>
+      <button type="button" class="quick-action" id="qa-raw"><span class="qa-icon">🥕</span><span data-i18n="qa_raw"></span></button>
+      <button type="button" class="quick-action" id="qa-inventory"><span class="qa-icon">📋</span><span data-i18n="qa_inventory"></span></button>
+      <button type="button" class="quick-action" id="qa-recipe"><span class="qa-icon">➕</span><span data-i18n="qa_new_recipe"></span></button>
+    </section>
 
-    <!-- Рецепты -->
+    <!-- ===== Сегодня ===== -->
+    <section class="card" id="today-section">
+      <div class="card-head"><h2>🍳 <span data-i18n="today_title"></span></h2><span class="hint" id="today-date"></span></div>
+      <div id="today" class="list"></div>
+      <div class="row" style="margin-top:12px">
+        <button type="button" class="btn" id="today-new">＋ <span data-i18n="new_batch"></span></button>
+        <button type="button" class="btn secondary" id="today-repeat">🔁 <span data-i18n="repeat_yesterday"></span></button>
+      </div>
+    </section>
+
+    <!-- ===== Техкарты ===== -->
     <section class="section" id="recipes-section">
-      <div class="section-title"><span data-i18n="tab_recipes"></span><span class="badge info" id="recipes-count">—</span></div>
+      <div class="section-title"><span data-i18n="recipes_title"></span><span class="badge info" id="recipes-count">—</span></div>
+      <div class="search"><input id="search" type="search" autocomplete="off" data-i18n-placeholder="search_recipe"></div>
+      <div class="chips" id="recipe-cats"></div>
       <div class="recipe-grid" id="recipes">
         <div class="skeleton block"></div><div class="skeleton block"></div>
         <div class="skeleton block"></div><div class="skeleton block"></div>
       </div>
     </section>
 
-    <!-- История партий -->
+    <!-- ===== История партий ===== -->
     <section class="card" id="history-section">
       <div class="card-head"><h2 data-i18n="recent_batches"></h2></div>
       <div id="history" class="list"></div>
@@ -55,9 +74,16 @@
     const { api, fmtMoney, fmtQty, fmtDate, esc, toast, showError, errorText, modal, confirm } = App;
     const t = I18N.t;
     const $ = (id) => document.getElementById(id);
-    let recipes = [];
+    const RECIPE_CATS = ["first", "main", "garnish", "bakery", "salad", "other"];
+    const RECIPE_CAT_ICONS = { first: "🍲", main: "🍛", garnish: "🍚", bakery: "🥐", salad: "🥗", other: "🍽️" };
 
-    // ---------- Иконка блюда по названию ----------
+    let recipes = [];
+    let stock = [];
+    let batches = [];
+    let recipeCat = "all";
+    const photoCache = {};          // recipe_id → objectURL
+
+    // ---------- Иконка блюда по названию (если нет фото) ----------
     const ICONS = [
       [/плов|ош\b|ош\s|osh/i, "🍚"], [/лагм|лапш|мампар|спагет|макарон/i, "🍜"], [/суп|борщ|шовл|мастав|мош\s?хурд|гарох|горох/i, "🍲"],
       [/манты|чучвар|чугвар|пельм|долма|голуб|галибси/i, "🥟"], [/самс|пирож|булоч/i, "🥐"], [/котлет|бифштекс|бештекис|люля|тефтел/i, "🍖"],
@@ -76,19 +102,48 @@
       return Number.isFinite(max) ? Math.max(0, max) : 0;
     }
 
-    // ---------- Загрузка и отрисовка рецептов ----------
+    async function photoUrl(id) {
+      if (!photoCache[id]) photoCache[id] = URL.createObjectURL(await api(`/api/recipes/${id}/photo`));
+      return photoCache[id];
+    }
+
+    // ---------- Загрузка ----------
+    async function loadAll() {
+      await Promise.all([loadRecipes(), loadStock(), loadBatches()]);
+    }
     async function loadRecipes() {
       try {
-        recipes = await api("/api/recipes");
+        // Значения по умолчанию — на случай техкарт без новых полей
+        recipes = (await api("/api/recipes")).map((r) => ({ category: "main", shelf_life_hours: 24, version: 1, has_photo: false, ...r,
+          category: r.category || "main", shelf_life_hours: r.shelf_life_hours || 24, version: r.version || 1 }));
         renderRecipes();
-      } catch (e) {
-        $("recipes").innerHTML = `<div class="error-box" style="grid-column:1/-1">${esc(errorText(e))}</div>`;
       }
+      catch (e) { $("recipes").innerHTML = `<div class="error-box" style="grid-column:1/-1">${esc(errorText(e))}</div>`; }
     }
+    async function loadStock() {
+      try { stock = await api("/api/stock"); } catch (e) { stock = []; }
+    }
+    async function loadBatches() {
+      try { batches = await api("/api/batch", { query: { limit: 60 } }); } catch (e) { batches = []; }
+      renderToday();
+      renderHistory();
+    }
+
+    // ---------- Техкарты ----------
+    function renderCats() {
+      $("recipe-cats").innerHTML = [["all", "🍽️ " + t("all")]].concat(RECIPE_CATS.map((c) => [c, `${RECIPE_CAT_ICONS[c]} ${t("rcat_" + c)}`]))
+        .map(([c, label]) => `<button type="button" class="chip ${c === recipeCat ? "active" : ""}" data-cat="${c}">${esc(label)}</button>`).join("");
+    }
+    $("recipe-cats").addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-cat]");
+      if (!b) return;
+      recipeCat = b.dataset.cat;
+      renderCats(); renderRecipes();
+    });
 
     function renderRecipes() {
       const q = $("search").value.trim().toLowerCase();
-      const list = recipes.filter((r) => !q || r.name.toLowerCase().includes(q));
+      const list = recipes.filter((r) => (!q || r.name.toLowerCase().includes(q)) && (recipeCat === "all" || r.category === recipeCat));
       $("recipes-count").textContent = list.length;
       $("ready-count").textContent = recipes.filter((r) => maxPortions(r) > 0).length + " / " + recipes.length;
       if (!list.length) { $("recipes").innerHTML = `<div style="grid-column:1/-1">${App.emptyHtml("🔍", "nothing_found")}</div>`; return; }
@@ -96,12 +151,17 @@
         const can = maxPortions(r);
         return `
           <button type="button" class="recipe-card" data-id="${r.id}" style="animation-delay:${Math.min(idx, 12) * 0.03}s">
-            <div class="emoji">${iconFor(r.name)}</div>
+            <div class="emoji" data-photo="${r.has_photo ? r.id : ""}">${iconFor(r.name)}</div>
             <div class="name">${esc(r.name)}</div>
             <div class="meta">${fmtMoney(r.cost_per_portion)} / ${esc(t("portion_one"))}</div>
             <span class="badge ${can > 0 ? "ok" : "danger"}">${can > 0 ? "✅ " + esc(t("can_cook", { n: fmtQty(can) })) : "❌ " + esc(t("no_stock"))}</span>
           </button>`;
       }).join("");
+      // Фото подгружаем после отрисовки (картинки идут с авторизацией, поэтому через api())
+      $("recipes").querySelectorAll("[data-photo]").forEach(async (el) => {
+        if (!el.dataset.photo) return;
+        try { el.innerHTML = `<img src="${await photoUrl(el.dataset.photo)}" alt="">`; el.classList.add("has-photo"); } catch (e) { /* оставим иконку */ }
+      });
     }
 
     $("search").addEventListener("input", renderRecipes);
@@ -110,115 +170,528 @@
       if (card) openRecipe(recipes.find((r) => String(r.id) === card.dataset.id));
     });
 
-    // ---------- Модальное окно рецепта ----------
-    function ingredientRows(r, planned) {
-      const factor = r.base_yield ? planned / r.base_yield : 0;
-      let shortages = 0;
-      const rows = r.ingredients.map((i) => {
-        const need = i.quantity_in_stock_unit != null ? i.quantity_in_stock_unit * factor : null;
-        const ok = need == null ? null : need <= i.stock_quantity + 1e-9;
-        if (ok === false) shortages += 1;
-        return `<tr>
-          <td>${esc(i.product)}</td>
-          <td class="right num">${need != null ? fmtQty(need) : "?"} <span class="dim">${esc(i.stock_unit)}</span></td>
-          <td class="right num ${ok === false ? "danger" : ""}">${fmtQty(i.stock_quantity)}</td>
-          <td class="right">${ok == null ? "⚠️" : ok ? "✅" : "❌"}</td>
-        </tr>`;
-      }).join("");
-      return { rows, shortages, cost: r.cost_per_base * factor };
-    }
-
-    function openRecipe(r) {
+    /** Карточка техкарты: фото, состав, кнопки «Начать партию» и «Изменить» */
+    async function openRecipe(r) {
       if (!r) return;
       const body = document.createElement("div");
       body.className = "form";
       body.innerHTML = `
-        <div class="list-item" style="margin:0;padding:0;min-height:0">
-          <div class="lead" style="font-size:26px;width:52px;height:52px">${iconFor(r.name)}</div>
-          <div class="grow">
-            <div class="small muted">${esc(t("base_yield"))}: ${fmtQty(r.base_yield)} ${esc(t("portions_short"))}</div>
-            <div class="small muted">${esc(t("cost_per_portion"))}: <b>${fmtMoney(r.cost_per_portion)}</b></div>
-          </div>
+        <div class="recipe-hero" data-role="hero"><span>${iconFor(r.name)}</span></div>
+        <div class="mini-stats" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+          <div class="mini-stat"><div class="label">${esc(t("base_yield"))}</div><div class="value">${fmtQty(r.base_yield)} ${esc(t("portions_short"))}</div></div>
+          <div class="mini-stat"><div class="label">${esc(t("cost_per_portion"))}</div><div class="value">${fmtMoney(r.cost_per_portion)}</div></div>
+          <div class="mini-stat"><div class="label">${esc(t("shelf_life"))}</div><div class="value">${r.shelf_life_hours} ${esc(t("hours_short"))}</div></div>
         </div>
+        <div class="small muted">${RECIPE_CAT_ICONS[r.category] || ""} ${esc(t("rcat_" + r.category))} · ${esc(t("version_n", { n: r.version }))}</div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>${esc(t("product"))}</th><th class="right">${esc(t("per_base", { n: fmtQty(r.base_yield) }))}</th><th class="right">${esc(t("in_stock"))}</th></tr></thead>
+          <tbody>${r.ingredients.map((i) => `<tr><td>${esc(i.product)}</td><td class="right num">${fmtQty(i.quantity)} ${esc(i.unit)}</td>
+            <td class="right num ${i.stock_quantity <= 0 ? "danger" : ""}">${fmtQty(i.stock_quantity)} ${esc(i.stock_unit)}</td></tr>`).join("")}</tbody>
+        </table></div>`;
+      modal({ title: r.name, body, actions: [
+        { label: "✏️ " + t("edit"), kind: "secondary", onClick: () => { setTimeout(() => openRecipeEditor(r), 250); } },
+        { label: "🍳 " + t("start_batch"), kind: "success", onClick: () => { setTimeout(() => openBatch(r), 250); } },
+      ] });
+      if (r.has_photo) {
+        try { body.querySelector('[data-role="hero"]').innerHTML = `<img src="${await photoUrl(r.id)}" alt="">`; } catch (e) { /* без фото */ }
+      }
+    }
+
+    // ---------- Партия: план по техкарте → ФАКТИЧЕСКИЙ расход ----------
+    /**
+     * Повар указывает план порций; программа пересчитывает техкарту, а он подтверждает
+     * или правит фактический расход каждого продукта (может добавить продукт не из техкарты).
+     */
+    function openBatch(r, presetPortions) {
+      const body = document.createElement("div");
+      body.className = "form";
+      const defaultPortions = presetPortions || Math.max(1, Math.min(maxPortions(r) || 20, 20));
+      // Строки расхода: по техкарте + добавленные вручную
+      let lines = r.ingredients.map((i) => ({
+        product_id: i.product_id, name: i.product, unit: i.stock_unit, per_base: i.quantity_in_stock_unit,
+        price: i.price_per_unit || 0, have: i.stock_quantity, fact: null, extra: false,
+      }));
+      body.innerHTML = `
         <div class="row">
           <div class="field"><label>${esc(t("batch_portions"))}</label>
-            <input name="planned" type="number" inputmode="numeric" min="1" step="1" value="${Math.max(1, Math.min(maxPortions(r) || 20, 20))}"></div>
+            <input name="planned" type="number" inputmode="numeric" min="1" step="1" value="${defaultPortions}"></div>
           <div class="field"><label>${esc(t("date"))}</label><input name="date" type="date" value="${App.today()}"></div>
         </div>
-        <div class="field"><label>${esc(t("actual_yield"))}</label>
-          <input name="actual" type="number" inputmode="numeric" min="0" step="1" data-i18n-placeholder="optional"></div>
         <div>
-          <div class="card-head" style="margin:4px 0 6px"><h3>${esc(t("ingredients"))}</h3><span class="badge" data-role="status"></span></div>
-          <div class="table-wrap"><table>
-            <thead><tr><th>${esc(t("product"))}</th><th class="right">${esc(t("need"))}</th><th class="right">${esc(t("in_stock"))}</th><th class="right"></th></tr></thead>
-            <tbody data-role="rows"></tbody>
-          </table></div>
+          <div class="card-head" style="margin:4px 0 6px"><h3>${esc(t("actual_usage"))}</h3><span class="badge" data-role="status"></span></div>
+          <p class="small muted" style="margin:0 0 8px">${esc(t("actual_usage_hint"))}</p>
+          <div data-role="lines" class="usage-list"></div>
+          <button type="button" class="btn ghost" data-role="add" style="margin-top:8px">＋ ${esc(t("add_product_to_batch"))}</button>
         </div>
-        <div class="total-big"><span class="label">${esc(t("batch_cost"))}</span><span class="value" data-role="cost">—</span></div>`;
-
+        <div class="field"><label>${esc(t("actual_yield"))}</label>
+          <input name="actual" type="number" inputmode="numeric" min="0" step="1" data-i18n-placeholder="actual_yield_hint"></div>
+        <div class="total-big"><span class="label">${esc(t("batch_cost"))}</span><span class="value" data-role="cost">—</span></div>
+        <div class="small muted" data-role="per-portion"></div>`;
       const planned = body.querySelector('[name="planned"]');
-      const statusEl = body.querySelector('[data-role="status"]');
-      function refresh() {
-        const n = parseFloat(planned.value) || 0;
-        const { rows, shortages, cost } = ingredientRows(r, n);
-        body.querySelector('[data-role="rows"]').innerHTML = rows;
+      const actual = body.querySelector('[name="actual"]');
+
+      const planQty = (ln) => (ln.per_base != null ? (ln.per_base * (parseFloat(planned.value) || 0)) / (r.base_yield || 1) : 0);
+      const factQty = (ln) => (ln.fact == null ? planQty(ln) : ln.fact);
+
+      function render() {
+        let shortages = 0, noPrice = 0, cost = 0;
+        body.querySelector('[data-role="lines"]').innerHTML = lines.map((ln, idx) => {
+          const f = factQty(ln);
+          const short = f > ln.have + 1e-9, priceless = !ln.price && f > 0;
+          if (short) shortages += 1;
+          if (priceless) noPrice += 1;
+          cost += f * ln.price;
+          const diff = ln.fact != null && !ln.extra && Math.abs(ln.fact - planQty(ln)) > 1e-9;
+          return `
+            <div class="usage-row ${short ? "short" : ""}">
+              <div class="u-name"><b>${esc(ln.name)}</b>
+                <div class="small muted">${ln.extra ? esc(t("not_in_recipe")) : `${esc(t("by_recipe"))}: ${fmtQty(planQty(ln))} ${esc(ln.unit)}`}
+                  · ${esc(t("in_stock"))}: <span class="${short ? "danger" : ""}">${fmtQty(ln.have)}</span>${priceless ? ` · <span class="text-warning">${esc(t("no_price_short"))}</span>` : ""}</div></div>
+              <div class="u-input">
+                <input type="number" inputmode="decimal" min="0" step="any" data-line="${idx}" value="${+f.toFixed(3)}" class="${diff ? "changed" : ""}">
+                <span class="u-unit">${esc(ln.unit)}</span>
+              </div>
+            </div>`;
+        }).join("");
+        const status = body.querySelector('[data-role="status"]');
+        status.className = "badge " + (shortages || noPrice ? "danger" : "ok");
+        status.textContent = shortages ? "❌ " + t("shortages_count", { n: shortages }) : noPrice ? "⚠️ " + t("no_price_short") : "✅ " + t("status_ok");
         body.querySelector('[data-role="cost"]').textContent = fmtMoney(cost);
-        statusEl.className = "badge " + (shortages ? "danger" : "ok");
-        statusEl.textContent = shortages ? "❌ " + t("shortages_count", { n: shortages }) : "✅ " + t("status_ok");
+        const portions = parseFloat(actual.value) || parseFloat(planned.value) || 0;
+        body.querySelector('[data-role="per-portion"]').textContent = portions ? `${t("cost_per_portion")}: ${fmtMoney(cost / portions)} (${fmtQty(portions)} ${t("portions_short")})` : "";
       }
-      planned.addEventListener("input", refresh);
-      refresh();
+
+      body.addEventListener("input", (ev) => {
+        const idx = ev.target.dataset.line;
+        if (idx !== undefined) {
+          lines[idx].fact = ev.target.value === "" ? 0 : parseFloat(ev.target.value);
+          // перерисовываем только итоги, чтобы не терять фокус в поле
+          const ln = lines[idx];
+          ev.target.classList.toggle("changed", !ln.extra && Math.abs((ln.fact || 0) - planQty(ln)) > 1e-9);
+          recalcTotals();
+          return;
+        }
+        if (ev.target === planned) { lines.forEach((ln) => { if (!ln.extra) ln.fact = null; }); render(); }
+        if (ev.target === actual) recalcTotals();
+      });
+      function recalcTotals() {
+        let cost = 0;
+        lines.forEach((ln) => { cost += factQty(ln) * ln.price; });
+        body.querySelector('[data-role="cost"]').textContent = fmtMoney(cost);
+        const portions = parseFloat(actual.value) || parseFloat(planned.value) || 0;
+        body.querySelector('[data-role="per-portion"]').textContent = portions ? `${t("cost_per_portion")}: ${fmtMoney(cost / portions)} (${fmtQty(portions)} ${t("portions_short")})` : "";
+      }
+
+      // «＋ Продукт» — из справочника сырья (или новый)
+      body.querySelector('[data-role="add"]').addEventListener("click", async () => {
+        const p = await pickProduct(lines.map((l) => l.product_id));
+        if (!p) return;
+        lines.push({ product_id: p.id, name: p.name, unit: p.unit, per_base: null, price: p.price_per_unit || 0, have: p.quantity, fact: 0, extra: true });
+        render();
+      });
+      render();
 
       modal({
-        title: r.name,
+        title: `🍳 ${r.name}`,
         body,
         actions: [
           { label: t("cancel"), kind: "secondary" },
-          { label: "🍲 " + t("create_batch"), kind: "success", onClick: async () => {
+          { label: "🍳 " + t("create_batch"), kind: "success", onClick: async () => {
             const n = parseFloat(planned.value);
             if (!(n > 0)) { planned.classList.add("invalid"); toast(t("quantity_required"), "error"); return false; }
-            const actualRaw = body.querySelector('[name="actual"]').value;
-            const ok = await confirm(t("confirm_batch", { recipe: esc(r.name), portions: fmtQty(n) }), { icon: "🍲", okLabel: t("create_batch"), kind: "success" });
+            const items = lines.map((ln) => ({ product_id: ln.product_id, quantity: +factQty(ln).toFixed(3) })).filter((i) => i.quantity > 0);
+            if (!items.length) { toast(t("err_recipe_empty"), "error"); return false; }
+            const ok = await confirm(t("confirm_batch", { recipe: esc(r.name), portions: fmtQty(n) }), { icon: "🍳", okLabel: t("create_batch"), kind: "success" });
             if (!ok) return false;
             try {
-              // Ждём ответ сервера; при нехватке — 400 со списком продуктов (показывает App.errorText)
+              // Сервер проверит остатки и цены; при нехватке вернёт список (App.errorText покажет)
               const res = await api("/api/batch", { json: {
-                recipe_id: r.id, planned_yield: n,
-                actual_yield: actualRaw === "" ? null : parseFloat(actualRaw),
+                recipe_id: r.id, planned_yield: n, items,
+                actual_yield: actual.value === "" ? null : parseFloat(actual.value),
                 date: body.querySelector('[name="date"]').value || App.today(),
               } });
               toast(`${t("batch_created")} · ${fmtMoney(res.cost)}`);
-              loadRecipes(); loadHistory();
+              await Promise.all([loadStock(), loadRecipes(), loadBatches()]);
             } catch (e) {
               showError(e);
-              return false; // окно остаётся открытым, чтобы поправить количество
+              return false;   // окно остаётся открытым, чтобы поправить количества
             }
           } },
         ],
       });
     }
 
-    // ---------- История партий ----------
-    async function loadHistory() {
-      $("history").innerHTML = App.skeletonHtml(3);
-      try {
-        const rows = await api("/api/batch");
-        $("history").innerHTML = rows.map((b) => `
-          <div class="list-item">
-            <div class="lead">${iconFor(b.recipe || "")}</div>
-            <div class="grow"><div class="title">${esc(b.recipe || "—")}</div>
-              <div class="hint">${fmtDate(b.date)} · ${fmtQty(b.planned_yield)}${b.actual_yield != null ? " → " + fmtQty(b.actual_yield) : ""} ${esc(t("portions_short"))}</div></div>
-            <div class="amount">${fmtMoney(b.cost)}</div>
-          </div>`).join("") || App.emptyHtml("🍳", "no_batches");
-      } catch (e) {
-        $("history").innerHTML = `<div class="error-box">${esc(errorText(e))}</div>`;
-      }
+    /** Выбор продукта из справочника сырья (с поиском) или «+ Новый товар» */
+    function pickProduct(excludeIds = []) {
+      return new Promise((resolve) => {
+        let chosen = null;
+        const body = document.createElement("div");
+        body.className = "form";
+        body.innerHTML = `
+          <div class="search"><input type="search" data-role="q" autocomplete="off" placeholder="${esc(t("search_product"))}"></div>
+          <button type="button" class="btn ghost" data-role="new">＋ ${esc(t("new_product"))}</button>
+          <div class="list" data-role="list"></div>`;
+        const m = modal({ title: "🥕 " + t("choose_product"), body, onClose: () => resolve(chosen) });
+        const draw = () => {
+          const q = body.querySelector('[data-role="q"]').value.trim().toLowerCase();
+          body.querySelector('[data-role="list"]').innerHTML = stock
+            .filter((p) => !excludeIds.includes(p.id) && (!q || p.name.toLowerCase().includes(q)))
+            .map((p) => `<div class="list-item tappable" data-pid="${p.id}"><div class="lead">${App.CATEGORY_ICONS[p.category] || "🧺"}</div>
+              <div class="grow"><div class="title">${esc(p.name)}</div><div class="hint">${fmtQty(p.quantity)} ${esc(p.unit)} · ${fmtMoney(p.price_per_unit)}</div></div></div>`).join("")
+            || App.emptyHtml("🔍", "nothing_found");
+        };
+        body.addEventListener("input", draw);
+        body.addEventListener("click", async (ev) => {
+          const it = ev.target.closest("[data-pid]");
+          if (it) { chosen = stock.find((p) => String(p.id) === it.dataset.pid); m.close(); return; }
+          if (ev.target.closest('[data-role="new"]')) {
+            const name = body.querySelector('[data-role="q"]').value.trim();
+            const p = await App.createProduct({ name });
+            if (p) { await loadStock(); chosen = stock.find((x) => x.id === p.id) || p; m.close(); }
+          }
+        });
+        draw();
+      });
     }
 
-    loadRecipes();
-    loadHistory();
-    // Кнопка «История» / «Рецепты» в боте открывает ?tab=... — прокручиваем к нужному блоку
+    // ---------- Редактор техкарты: создать / изменить ----------
+    async function openRecipeEditor(r = null) {
+      if (!stock.length) await loadStock();
+      const body = document.createElement("div");
+      body.className = "form";
+      let rows = r ? r.ingredients.map((i) => ({ product_id: i.product_id, quantity: i.quantity, unit: i.unit })) : [];
+      let photoBlob = null;
+      body.innerHTML = `
+        <div class="photo-pick" data-role="photo">
+          <div class="recipe-hero small" data-role="preview"><span>📷</span></div>
+          <button type="button" class="btn secondary" data-role="photo-btn">📷 ${esc(t(r && r.has_photo ? "change_photo" : "add_photo"))}</button>
+          <input type="file" accept="image/*" hidden data-role="photo-file">
+        </div>
+        <div class="field"><label>${esc(t("dish_name"))}</label><input name="name" maxlength="255" value="${esc(r ? r.name : "")}"></div>
+        <div class="row">
+          <div class="field"><label>${esc(t("category"))}</label>
+            <select name="category">${RECIPE_CATS.map((c) => `<option value="${c}" ${r && r.category === c ? "selected" : ""}>${RECIPE_CAT_ICONS[c]} ${esc(t("rcat_" + c))}</option>`).join("")}</select></div>
+          <div class="field"><label>${esc(t("shelf_life_hours"))}</label><input name="shelf" type="number" inputmode="numeric" min="1" max="720" value="${r ? r.shelf_life_hours : 24}"></div>
+        </div>
+        <div class="field"><label>${esc(t("base_yield_label"))}</label><input name="yield" type="number" inputmode="numeric" min="1" step="any" value="${r ? r.base_yield : 100}"></div>
+        <div>
+          <div class="card-head" style="margin:4px 0 6px"><h3>${esc(t("ingredients"))}</h3><span class="hint" data-role="cost"></span></div>
+          <div data-role="rows" class="usage-list"></div>
+          <button type="button" class="btn ghost" data-role="add" style="margin-top:8px">＋ ${esc(t("add_ingredient"))}</button>
+        </div>
+        ${r ? `<p class="small muted">${esc(t("version_hint", { n: r.version }))}</p>` : ""}`;
+
+      const unitsFor = (p) => {
+        const base = { kg: ["kg", "g"], g: ["g", "kg"], l: ["l", "ml"], ml: ["ml", "l"] }[p.unit] || [p.unit];
+        return base;
+      };
+      function drawRows() {
+        let cost = 0;
+        body.querySelector('[data-role="rows"]').innerHTML = rows.map((row, idx) => {
+          const p = stock.find((x) => x.id === row.product_id) || { name: "?", unit: row.unit, price_per_unit: 0 };
+          const factor = row.unit === "g" && p.unit === "kg" || row.unit === "ml" && p.unit === "l" ? 0.001
+            : row.unit === "kg" && p.unit === "g" || row.unit === "l" && p.unit === "ml" ? 1000 : 1;
+          cost += (parseFloat(row.quantity) || 0) * factor * (p.price_per_unit || 0);
+          return `
+            <div class="usage-row">
+              <div class="u-name"><b>${esc(p.name)}</b><div class="small muted">${fmtMoney(p.price_per_unit)} / ${esc(p.unit)}</div></div>
+              <div class="u-input">
+                <input type="number" inputmode="decimal" min="0" step="any" data-q="${idx}" value="${row.quantity}">
+                <select data-u="${idx}">${unitsFor(p).map((u) => `<option value="${u}" ${u === row.unit ? "selected" : ""}>${esc(t("unit_" + u) || u)}</option>`).join("")}</select>
+                <button type="button" class="icon-btn small" data-del="${idx}" aria-label="delete">✕</button>
+              </div>
+            </div>`;
+        }).join("") || `<div class="empty">${esc(t("no_ingredients"))}</div>`;
+        const y = parseFloat(body.querySelector('[name="yield"]').value) || 1;
+        body.querySelector('[data-role="cost"]').textContent = rows.length ? `${fmtMoney(cost)} · ${fmtMoney(cost / y)} / ${t("portion_one")}` : "";
+      }
+      body.addEventListener("input", (ev) => {
+        if (ev.target.dataset.q !== undefined) { rows[ev.target.dataset.q].quantity = ev.target.value; }
+        if (ev.target.dataset.q !== undefined || ev.target.name === "yield") {
+          // обновляем только итог, не перерисовывая поля (чтобы не терять фокус)
+          let cost = 0;
+          rows.forEach((row) => {
+            const p = stock.find((x) => x.id === row.product_id) || { price_per_unit: 0, unit: row.unit };
+            const factor = row.unit === "g" && p.unit === "kg" || row.unit === "ml" && p.unit === "l" ? 0.001 : row.unit === "kg" && p.unit === "g" || row.unit === "l" && p.unit === "ml" ? 1000 : 1;
+            cost += (parseFloat(row.quantity) || 0) * factor * (p.price_per_unit || 0);
+          });
+          const y = parseFloat(body.querySelector('[name="yield"]').value) || 1;
+          body.querySelector('[data-role="cost"]').textContent = rows.length ? `${fmtMoney(cost)} · ${fmtMoney(cost / y)} / ${t("portion_one")}` : "";
+        }
+      });
+      body.addEventListener("change", (ev) => {
+        if (ev.target.dataset.u !== undefined) { rows[ev.target.dataset.u].unit = ev.target.value; drawRows(); }
+      });
+      body.addEventListener("click", async (ev) => {
+        const del = ev.target.closest("[data-del]");
+        if (del) { rows.splice(Number(del.dataset.del), 1); drawRows(); return; }
+        if (ev.target.closest('[data-role="add"]')) {
+          const p = await pickProduct(rows.map((x) => x.product_id));
+          if (p) { rows.push({ product_id: p.id, quantity: "", unit: p.unit }); drawRows(); }
+        }
+        if (ev.target.closest('[data-role="photo-btn"]')) body.querySelector('[data-role="photo-file"]').click();
+      });
+      body.querySelector('[data-role="photo-file"]').addEventListener("change", async (ev) => {
+        const f = ev.target.files[0];
+        if (!f) return;
+        photoBlob = await compressImage(f);
+        body.querySelector('[data-role="preview"]').innerHTML = `<img src="${URL.createObjectURL(photoBlob)}" alt="">`;
+      });
+      drawRows();
+      if (r && r.has_photo) {
+        try { body.querySelector('[data-role="preview"]').innerHTML = `<img src="${await photoUrl(r.id)}" alt="">`; } catch (e) { /* без фото */ }
+      }
+
+      modal({
+        title: r ? "✏️ " + r.name : "➕ " + t("qa_new_recipe"),
+        body,
+        actions: [
+          { label: t("cancel"), kind: "secondary" },
+          { label: "💾 " + t("save"), onClick: async () => {
+            const name = body.querySelector('[name="name"]').value.trim();
+            const valid = rows.filter((x) => parseFloat(x.quantity) > 0);
+            if (name.length < 2) { body.querySelector('[name="name"]').classList.add("invalid"); toast(t("dish_name_required"), "error"); return false; }
+            if (!valid.length) { toast(t("no_ingredients"), "error"); return false; }
+            const payload = {
+              name, category: body.querySelector('[name="category"]').value,
+              shelf_life_hours: parseInt(body.querySelector('[name="shelf"]').value, 10) || 24,
+              base_yield: parseFloat(body.querySelector('[name="yield"]').value) || 1,
+              ingredients: valid.map((x) => ({ product_id: x.product_id, quantity: parseFloat(x.quantity), unit: x.unit })),
+            };
+            const saved = r ? await api(`/api/recipes/${r.id}`, { method: "PUT", json: payload }) : await api("/api/recipes", { json: payload });
+            if (photoBlob) {
+              const form = new FormData();
+              form.append("file", photoBlob, "photo.jpg");
+              await api(`/api/recipes/${saved.id}/photo`, { form });
+              delete photoCache[saved.id];
+            }
+            toast(r && saved.version > r.version ? t("recipe_saved_version", { n: saved.version }) : t("saved"));
+            await loadRecipes();
+          } },
+        ],
+      });
+    }
+
+    /** Сжимаем фото на телефоне до 1280px JPEG — быстро грузится и мало весит */
+    function compressImage(file, maxSide = 1280) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const k = Math.min(1, maxSide / Math.max(img.width, img.height));
+          const c = document.createElement("canvas");
+          c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+          c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+          c.toBlob((b) => (b ? resolve(b) : reject(new Error("photo"))), "image/jpeg", 0.82);
+        };
+        img.onerror = reject;
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    // ---------- Сырьё: справочник продуктов ----------
+    function openRawMaterials() {
+      let cat = "all";
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = `
+        <div class="search"><input type="search" data-role="q" autocomplete="off" placeholder="${esc(t("search_product"))}"></div>
+        <div class="chips" data-role="cats"></div>
+        <div class="row">
+          <button type="button" class="btn" data-role="new">＋ ${esc(t("new_product"))}</button>
+          <button type="button" class="btn secondary" data-role="auto">🪄 ${esc(t("auto_categories"))}</button>
+        </div>
+        <div class="list" data-role="list"></div>`;
+      const draw = () => {
+        const counts = {};
+        stock.forEach((p) => { counts[p.category] = (counts[p.category] || 0) + 1; });
+        body.querySelector('[data-role="cats"]').innerHTML = [["all", `🧺 ${t("all")} · ${stock.length}`]]
+          .concat(App.CATEGORY_KEYS.filter((c) => counts[c]).map((c) => [c, `${App.CATEGORY_ICONS[c]} ${t("cat_" + c)} · ${counts[c]}`]))
+          .map(([c, l]) => `<button type="button" class="chip ${c === cat ? "active" : ""}" data-cat="${c}">${esc(l)}</button>`).join("");
+        body.querySelector('[data-role="auto"]').hidden = !(counts.other > 3);
+        const q = body.querySelector('[data-role="q"]').value.trim().toLowerCase();
+        body.querySelector('[data-role="list"]').innerHTML = stock
+          .filter((p) => (cat === "all" || p.category === cat) && (!q || p.name.toLowerCase().includes(q)))
+          .map((p) => `<div class="list-item tappable" data-pid="${p.id}"><div class="lead">${App.CATEGORY_ICONS[p.category] || "🧺"}</div>
+            <div class="grow"><div class="title">${esc(p.name)}</div><div class="hint">${esc(t("cat_" + p.category))} · ${fmtMoney(p.price_per_unit)} / ${esc(p.unit)}</div></div>
+            <div class="amount ${p.quantity <= 0 ? "danger" : ""}">${fmtQty(p.quantity)} ${esc(p.unit)}</div></div>`).join("")
+          || App.emptyHtml("🔍", "nothing_found");
+      };
+      body.addEventListener("input", draw);
+      body.addEventListener("click", async (ev) => {
+        const c = ev.target.closest("[data-cat]");
+        if (c) { cat = c.dataset.cat; draw(); return; }
+        if (ev.target.closest('[data-role="new"]')) {
+          const p = await App.createProduct({ name: body.querySelector('[data-role="q"]').value.trim() });
+          if (p) { await loadStock(); draw(); }
+          return;
+        }
+        if (ev.target.closest('[data-role="auto"]')) {
+          // Раскладываем «Прочее» по категориям по названию — одним нажатием
+          const todo = stock.filter((p) => p.category === "other" && App.guessCategory(p.name) !== "other");
+          if (!todo.length) { toast(t("nothing_found"), "warning"); return; }
+          if (!(await confirm(esc(t("auto_categories_confirm", { n: todo.length })), { icon: "🪄" }))) return;
+          for (const p of todo) await api(`/api/stock/${p.id}`, { method: "PATCH", json: { category: App.guessCategory(p.name) } });
+          toast(t("saved")); await loadStock(); draw();
+          return;
+        }
+        const it = ev.target.closest("[data-pid]");
+        if (it) editProduct(stock.find((p) => String(p.id) === it.dataset.pid), draw);
+      });
+      draw();
+      modal({ title: "🥕 " + t("qa_raw"), body });
+    }
+
+    function editProduct(p, after) {
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = `
+        <div class="field"><label>${esc(t("product_name"))}</label><input name="name" maxlength="255" value="${esc(p.name)}"></div>
+        <div class="field"><label>${esc(t("category"))}</label>
+          <select name="category">${App.CATEGORY_KEYS.map((c) => `<option value="${c}" ${c === p.category ? "selected" : ""}>${App.CATEGORY_ICONS[c]} ${esc(t("cat_" + c))}</option>`).join("")}</select></div>
+        <div class="small muted">${esc(t("in_stock"))}: ${fmtQty(p.quantity)} ${esc(p.unit)} · ${fmtMoney(p.price_per_unit)} / ${esc(p.unit)}</div>`;
+      modal({ title: "✏️ " + p.name, body, actions: [
+        { label: t("cancel"), kind: "secondary" },
+        { label: t("save"), onClick: async () => {
+          await api(`/api/stock/${p.id}`, { method: "PATCH", json: { name: body.querySelector('[name="name"]').value.trim(), category: body.querySelector('[name="category"]').value } });
+          toast(t("saved")); await loadStock(); after && after();
+        } },
+      ] });
+    }
+
+    // ---------- Инвентаризация: фактические остатки ----------
+    async function openInventory() {
+      await loadStock();
+      const counted = {};   // product_id → {quantity, price}
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = `
+        <p class="small muted">${esc(t("inventory_hint"))}</p>
+        <div class="search"><input type="search" data-role="q" autocomplete="off" placeholder="${esc(t("search_product"))}"></div>
+        <div class="usage-list" data-role="list"></div>
+        <div class="small muted" data-role="changed"></div>`;
+      const draw = () => {
+        const q = body.querySelector('[data-role="q"]').value.trim().toLowerCase();
+        body.querySelector('[data-role="list"]').innerHTML = stock
+          .filter((p) => !q || p.name.toLowerCase().includes(q))
+          .map((p) => {
+            const c = counted[p.id] || {};
+            return `
+              <div class="usage-row">
+                <div class="u-name"><b>${App.CATEGORY_ICONS[p.category] || ""} ${esc(p.name)}</b>
+                  <div class="small muted">${esc(t("by_records"))}: ${fmtQty(p.quantity)} ${esc(p.unit)}</div></div>
+                <div class="u-input">
+                  <input type="number" inputmode="decimal" min="0" step="any" data-inv="${p.id}" value="${c.quantity ?? ""}" placeholder="${fmtQty(p.quantity)}">
+                  <span class="u-unit">${esc(p.unit)}</span>
+                </div>
+                ${!p.price_per_unit ? `<div class="u-price"><input type="number" inputmode="decimal" min="0" step="any" data-price="${p.id}" value="${c.price ?? ""}" placeholder="${esc(t("price_per_unit"))}, ${esc(t("currency"))}/${esc(p.unit)}"></div>` : ""}
+              </div>`;
+          }).join("") || App.emptyHtml("🔍", "nothing_found");
+        const n = Object.values(counted).filter((c) => c.quantity !== undefined && c.quantity !== "").length;
+        body.querySelector('[data-role="changed"]').textContent = n ? t("inventory_counted", { n }) : "";
+      };
+      body.addEventListener("input", (ev) => {
+        if (ev.target.dataset.inv) { (counted[ev.target.dataset.inv] ||= {}).quantity = ev.target.value; }
+        else if (ev.target.dataset.price) { (counted[ev.target.dataset.price] ||= {}).price = ev.target.value; }
+        else return draw();
+        const n = Object.values(counted).filter((c) => c.quantity !== undefined && c.quantity !== "").length;
+        body.querySelector('[data-role="changed"]').textContent = n ? t("inventory_counted", { n }) : "";
+      });
+      draw();
+      modal({
+        title: "📋 " + t("qa_inventory"),
+        body,
+        actions: [
+          { label: t("cancel"), kind: "secondary" },
+          { label: "💾 " + t("save"), onClick: async () => {
+            const items = Object.entries(counted)
+              .filter(([, c]) => (c.quantity !== undefined && c.quantity !== "") || (c.price !== undefined && c.price !== ""))
+              .map(([id, c]) => {
+                const p = stock.find((x) => String(x.id) === id);
+                return {
+                  product_id: Number(id),
+                  quantity: c.quantity !== undefined && c.quantity !== "" ? parseFloat(c.quantity) : p.quantity,
+                  price_per_unit: c.price !== undefined && c.price !== "" ? parseFloat(c.price) : null,
+                };
+              });
+            if (!items.length) { toast(t("inventory_nothing"), "error"); return false; }
+            if (!(await confirm(esc(t("inventory_confirm", { n: items.length })), { icon: "📋" }))) return false;
+            const res = await api("/api/stock/inventory", { json: { items } });
+            toast(t("inventory_saved", { n: res.count }));
+            await Promise.all([loadStock(), loadRecipes()]);
+          } },
+        ],
+      });
+    }
+
+    // ---------- Сегодня и история ----------
+    function batchRow(b) {
+      return `
+        <div class="list-item">
+          <div class="lead">${iconFor(b.recipe || "")}</div>
+          <div class="grow"><div class="title">${esc(b.recipe || "—")}</div>
+            <div class="hint">${fmtDate(b.date)} · ${fmtQty(b.planned_yield)}${b.actual_yield != null ? " → " + fmtQty(b.actual_yield) : ""} ${esc(t("portions_short"))} · ${fmtMoney(b.cost_per_portion)}/${esc(t("portion_one"))}</div></div>
+          <div class="amount">${fmtMoney(b.cost)}</div>
+        </div>`;
+    }
+    function renderToday() {
+      const today = App.today();
+      $("today-date").textContent = fmtDate(today);
+      const list = batches.filter((b) => b.date === today);
+      $("today").innerHTML = list.map(batchRow).join("") || App.emptyHtml("🍳", "no_batches_today");
+      $("today-repeat").disabled = !batches.some((b) => b.date < today);
+    }
+    function renderHistory() {
+      const today = App.today();
+      $("history").innerHTML = batches.filter((b) => b.date !== today).slice(0, 20).map(batchRow).join("") || App.emptyHtml("🍳", "no_batches");
+    }
+
+    /** «Новая партия» — выбор блюда из техкарт */
+    function pickRecipe() {
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = `<div class="search"><input type="search" data-role="q" autocomplete="off" placeholder="${esc(t("search_recipe"))}"></div><div class="list" data-role="list"></div>`;
+      const m = modal({ title: "🍳 " + t("new_batch"), body });
+      const draw = () => {
+        const q = body.querySelector('[data-role="q"]').value.trim().toLowerCase();
+        body.querySelector('[data-role="list"]').innerHTML = recipes.filter((r) => !q || r.name.toLowerCase().includes(q)).map((r) => {
+          const can = maxPortions(r);
+          return `<div class="list-item tappable" data-rid="${r.id}"><div class="lead">${iconFor(r.name)}</div>
+            <div class="grow"><div class="title">${esc(r.name)}</div><div class="hint">${fmtMoney(r.cost_per_portion)} / ${esc(t("portion_one"))}</div></div>
+            <span class="badge ${can > 0 ? "ok" : "danger"}">${can > 0 ? fmtQty(can) : "0"}</span></div>`;
+        }).join("") || App.emptyHtml("🔍", "nothing_found");
+      };
+      body.addEventListener("input", draw);
+      body.addEventListener("click", (ev) => {
+        const it = ev.target.closest("[data-rid]");
+        if (!it) return;
+        m.close();
+        setTimeout(() => openBatch(recipes.find((r) => String(r.id) === it.dataset.rid)), 250);
+      });
+      draw();
+    }
+
+    /** «Повторить вчерашнюю» — последняя партия до сегодняшнего дня, те же блюдо и порции */
+    function repeatYesterday() {
+      const today = App.today();
+      const last = batches.find((b) => b.date < today);
+      if (!last) return toast(t("no_batches"), "warning");
+      const r = recipes.find((x) => x.id === last.recipe_id);
+      if (!r) return toast(t("err_404"), "error");
+      openBatch(r, Number(last.actual_yield || last.planned_yield));
+    }
+
+    $("qa-today").addEventListener("click", () => $("today-section").scrollIntoView({ behavior: "smooth", block: "start" }));
+    $("qa-raw").addEventListener("click", async () => { await loadStock(); openRawMaterials(); });
+    $("qa-inventory").addEventListener("click", openInventory);
+    $("qa-recipe").addEventListener("click", () => openRecipeEditor(null));
+    $("today-new").addEventListener("click", pickRecipe);
+    $("today-repeat").addEventListener("click", repeatYesterday);
+
+    renderCats();
+    loadAll();
+    // Кнопки бота открывают ?tab=batch / recipes / history — прокручиваем к нужному блоку
     const tab = new URLSearchParams(location.search).get("tab");
+    if (tab === "recipes") $("recipes-section").scrollIntoView({ block: "start" });
     if (tab === "history") $("history-section").scrollIntoView({ block: "start" });
   </script>
 </body>

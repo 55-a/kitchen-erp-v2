@@ -401,3 +401,124 @@ async def test_role_choice_in_app_follows_bot_rules(client, db):
 async def test_entry_page_is_served(client):
     r = await client.get("/app")
     assert r.status_code == 200 and "role-grid" in r.text
+
+
+# ------------------------------------------------------------------ Этап 1: справочники, инвентаризация, техкарты, факт партии
+
+async def test_purchaser_adds_new_product_and_buys_it(client):
+    """«+ Новый товар» у закупщика → товар в справочнике сырья → первая закупка задаёт цену."""
+    h = auth_headers(PURCHASER_ID)
+    r = await client.post("/api/stock", json={"name": "  Сметана  20% ", "unit": "шт", "category": "dairy"}, headers=h)
+    assert r.status_code == 201
+    p = r.json()
+    assert (p["name"], p["unit"], p["category"], p["quantity"], p["price_per_unit"]) == ("Сметана 20%", "pcs", "dairy", 0, 0)
+    dup = await client.post("/api/stock", json={"name": "сметана 20%", "unit": "pcs"}, headers=h)
+    assert dup.status_code == 409 and dup.json()["detail"]["code"] == "product_exists"
+    r = await client.post("/api/purchase", json={"product_id": p["id"], "quantity": 4, "unit": "pcs", "total_price": 72000}, headers=h)
+    assert r.status_code == 201 and r.json()["stock"]["price_per_unit"] == 18000
+    assert (await client.post("/api/stock", json={"name": "Соль", "unit": "kg"}, headers=auth_headers(CLIENT_ID))).status_code == 403
+
+
+async def test_inventory_sets_quantities_and_keeps_history(client, db):
+    from sqlalchemy import select
+
+    from api.models import StockAdjustment
+
+    stock = (await client.get("/api/stock", headers=auth_headers(COOK_ID))).json()
+    rice = next(p for p in stock if p["name"] == "Рис")
+    new = (await client.post("/api/stock", json={"name": "Курдюк", "unit": "kg", "category": "meat"}, headers=auth_headers(COOK_ID))).json()
+    r = await client.post("/api/stock/inventory", json={"items": [
+        {"product_id": rice["id"], "quantity": 7.5, "price_per_unit": 1},         # цена у риса уже есть — не меняется
+        {"product_id": new["id"], "quantity": 2, "price_per_unit": 130000},        # новый товар — цену берём
+    ]}, headers=auth_headers(COOK_ID))
+    assert r.status_code == 200 and r.json()["count"] == 2
+    stock = {p["name"]: p for p in (await client.get("/api/stock", headers=auth_headers(COOK_ID))).json()}
+    assert (stock["Рис"]["quantity"], stock["Рис"]["price_per_unit"]) == (7.5, 15000)
+    assert (stock["Курдюк"]["quantity"], stock["Курдюк"]["price_per_unit"]) == (2, 130000)
+    async with db() as s:
+        adj = (await s.execute(select(StockAdjustment).where(StockAdjustment.product_name == "Рис"))).scalar_one()
+        assert (adj.old_quantity, adj.new_quantity, adj.delta) == (10, Decimal("7.5"), Decimal("-2.5"))
+
+
+async def test_cook_creates_and_edits_recipe_with_versions(client):
+    h = auth_headers(COOK_ID)
+    stock = {p["name"]: p for p in (await client.get("/api/stock", headers=h)).json()}
+    body = {"name": "Плов тестовый", "base_yield": 10, "category": "main", "shelf_life_hours": 12,
+            "ingredients": [{"product_id": stock["Рис"]["id"], "quantity": 1000, "unit": "g"},
+                            {"product_id": stock["Морковь"]["id"], "quantity": 0.8, "unit": "kg"}]}
+    r = await client.post("/api/recipes", json=body, headers=h)
+    assert r.status_code == 201
+    rec = r.json()
+    assert (rec["version"], rec["shelf_life_hours"], rec["cost_per_base"]) == (1, 12, 15000 + 0.8 * 6000)
+
+    body["shelf_life_hours"] = 6                                   # срок — не состав: версия та же
+    assert (await client.put(f"/api/recipes/{rec['id']}", json=body, headers=h)).json()["version"] == 1
+    body["ingredients"][1]["quantity"] = 1                         # поменяли состав — версия 2
+    assert (await client.put(f"/api/recipes/{rec['id']}", json=body, headers=h)).json()["version"] == 2
+
+    assert (await client.post("/api/recipes", json=body, headers=h)).status_code == 409   # дубль названия
+    bad = dict(body, name="Другое", ingredients=[{"product_id": stock["Рис"]["id"], "quantity": 2, "unit": "pcs"}])
+    r = await client.post("/api/recipes", json=bad, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "unit_mismatch"
+    assert (await client.post("/api/recipes", json=body | {"name": "X блюдо"}, headers=auth_headers(PURCHASER_ID))).status_code == 403
+
+
+async def test_recipe_photo_upload_and_download(client, db):
+    h = auth_headers(COOK_ID)
+    async with db() as s:
+        s.add(Recipe(name="Фото-блюдо", base_yield=Decimal("1")))
+        await s.commit()
+    rid = next(r["id"] for r in (await client.get("/api/recipes", headers=h)).json() if r["name"] == "Фото-блюдо")
+    jpeg = b"\xff\xd8\xff\xe0" + b"0" * 100
+    r = await client.post(f"/api/recipes/{rid}/photo", files={"file": ("p.jpg", jpeg, "image/jpeg")}, headers=h)
+    assert r.status_code == 200
+    r = await client.get(f"/api/recipes/{rid}/photo", headers=h)
+    assert r.status_code == 200 and r.content == jpeg
+    assert next(x for x in (await client.get("/api/recipes", headers=h)).json() if x["id"] == rid)["has_photo"] is True
+
+
+async def test_batch_with_actual_consumption_and_price_block(client, db):
+    from sqlalchemy import select
+
+    from api.models import BatchItem
+
+    h = auth_headers(COOK_ID)
+    async with db() as s:
+        rice = (await s.execute(select(Stock).where(Stock.name == "Рис"))).scalar_one()
+        carrot = (await s.execute(select(Stock).where(Stock.name == "Морковь"))).scalar_one()
+        recipe = Recipe(name="Каша", base_yield=Decimal("10"))
+        recipe.ingredients = [RecipeIngredient(product_id=rice.id, quantity=Decimal("1"), unit="kg")]
+        s.add(recipe)
+        await s.commit()
+        rid, rice_id, carrot_id = recipe.id, rice.id, carrot.id
+
+    # Повар потратил риса больше, чем по техкарте, и добавил морковь
+    r = await client.post("/api/batch", json={"recipe_id": rid, "planned_yield": 10, "actual_yield": 12,
+                                              "items": [{"product_id": rice_id, "quantity": 1.2},
+                                                        {"product_id": carrot_id, "quantity": 0.5}]}, headers=h)
+    assert r.status_code == 201
+    assert r.json()["cost"] == 1.2 * 15000 + 0.5 * 6000
+    stock = {p["name"]: p["quantity"] for p in (await client.get("/api/stock", headers=h)).json()}
+    assert (stock["Рис"], stock["Морковь"]) == (8.8, 4.5)
+    async with db() as s:
+        lines = {ln.product_name: ln for ln in (await s.execute(select(BatchItem))).scalars().all()}
+        assert lines["Рис"].planned_quantity == 1 and lines["Рис"].quantity == Decimal("1.2")
+        assert lines["Морковь"].planned_quantity is None
+    hist = (await client.get("/api/batch", headers=h)).json()[0]
+    assert hist["cost_per_portion"] == 1750.0 and len(hist["items"]) == 2      # 21 000 ÷ 12 фактических порций
+
+    # Товар без цены — партия блокируется
+    new = (await client.post("/api/stock", json={"name": "Нахат", "unit": "kg"}, headers=h)).json()
+    await client.post("/api/stock/inventory", json={"items": [{"product_id": new["id"], "quantity": 5}]}, headers=h)
+    r = await client.post("/api/batch", json={"recipe_id": rid, "planned_yield": 1,
+                                              "items": [{"product_id": new["id"], "quantity": 1}]}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "no_price"
+
+
+async def test_product_rename_and_category(client):
+    h = auth_headers(PURCHASER_ID)
+    rice = next(p for p in (await client.get("/api/stock", headers=h)).json() if p["name"] == "Рис")
+    r = await client.patch(f"/api/stock/{rice['id']}", json={"name": "Рис девзира", "category": "grain"}, headers=h)
+    assert r.status_code == 200 and (r.json()["name"], r.json()["category"]) == ("Рис девзира", "grain")
+    r = await client.patch(f"/api/stock/{rice['id']}", json={"name": "морковь"}, headers=h)
+    assert r.status_code == 409
