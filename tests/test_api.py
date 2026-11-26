@@ -704,3 +704,17 @@ async def test_today_screen_and_reminder_text(client, db):
     assert any(x["id"] == bid for x in left)
     text = reminder_text("ru", left)
     assert "Остались порции" in text and "10 порц." in text
+
+
+async def test_amount_in_words_for_act():
+    """Сумма прописью в акте сверки — как в 1С."""
+    from api.num_words import amount_in_words
+
+    assert amount_in_words(1_088_300, "ru") == "Один миллион восемьдесят восемь тысяч триста сум 00 тийин"
+    assert amount_in_words(5_660_000, "ru") == "Пять миллионов шестьсот шестьдесят тысяч сум 00 тийин"
+    assert amount_in_words(2_512.5, "ru") == "Две тысячи пятьсот двенадцать сум 50 тийин"
+    assert amount_in_words(1_088_300, "uz") == "Bir million sakson sakkiz ming uch yuz so'm 00 tiyin"
+    assert amount_in_words(1_088_300, "oz").startswith("Бир миллион")
+    assert amount_in_words(112, "en") == "One hundred twelve soum 00 tiyin"
+    assert amount_in_words(1_088_300, "zh") == "一百零八万八千三百苏姆整"
+    assert amount_in_words(10_005, "zh") == "一万零五苏姆整"
