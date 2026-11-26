@@ -84,6 +84,13 @@
       <button class="btn lg" id="download-btn" type="button">⬇️ <span data-i18n="download_pdf_act"></span></button>
       <button class="btn secondary" id="send-btn" type="button">📩 <span data-i18n="send_to_chat_short"></span></button>
     </section>
+
+    <!-- ===== Меню на неделю (PDF с фото, без цен) ===== -->
+    <section class="card">
+      <div class="card-head" style="margin:0"><h2>🗓 <span data-i18n="menu_week_title"></span></h2></div>
+      <p class="small muted" data-i18n="menu_week_hint"></p>
+      <button class="btn secondary" id="menu-btn" type="button">📩 <span data-i18n="menu_week_send"></span></button>
+    </section>
   </main>
 
   <script src="/static/js/i18n.js"></script>
@@ -204,6 +211,12 @@
     $("send-btn").addEventListener("click", () => withButton($("send-btn"), async () => {
       await api("/api/client/act-send", { json: actPayload() });
       toast(t("sent_to_chat"));
+    }));
+
+    // Меню на неделю: бот присылает PDF в чат (без цен и состава)
+    $("menu-btn").addEventListener("click", () => withButton($("menu-btn"), async () => {
+      await api("/api/menu/pdf-send", { method: "POST" });
+      toast(t("menu_pdf_sent"));
     }));
 
     // ---------- Выбор компании (только владелец) ----------

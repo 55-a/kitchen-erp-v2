@@ -522,3 +522,126 @@ async def test_product_rename_and_category(client):
     assert r.status_code == 200 and (r.json()["name"], r.json()["category"]) == ("Рис девзира", "grain")
     r = await client.patch(f"/api/stock/{rice['id']}", json={"name": "морковь"}, headers=h)
     assert r.status_code == 409
+
+
+# ------------------------------------------------------------------ Этап 2: раздача, остатки, списания
+
+async def _make_batch(client, db, portions=10):
+    """Техкарта «Каша» (1 кг риса на 10 порц.) и партия на N порций — 15 000 сум за 10 порций."""
+    async with db() as s:
+        rice = (await s.execute(Stock.__table__.select().where(Stock.name == "Рис"))).first()
+        recipe = Recipe(name=f"Каша {portions}", base_yield=Decimal("10"), shelf_life_hours=24)
+        recipe.ingredients = [RecipeIngredient(product_id=rice.id, quantity=Decimal("1"), unit="kg")]
+        s.add(recipe)
+        await s.commit()
+        rid = recipe.id
+    r = await client.post("/api/batch", json={"recipe_id": rid, "planned_yield": portions}, headers=auth_headers(COOK_ID))
+    assert r.status_code == 201, r.text
+    return r.json()["id"], rid
+
+
+async def test_distribute_creates_deliveries_and_tracks_remaining(client, db):
+    bid, _ = await _make_batch(client, db, 10)          # себестоимость порции = 1 500
+    h = auth_headers(COOK_ID)
+    before = (await client.get("/api/client/invoice", params={"client": "FOYDALI FOOD GROUP"}, headers=auth_headers(OWNER_ID))).json()
+    r = await client.post(f"/api/batch/{bid}/distribute", json={"items": [{"client": "FOYDALI FOOD GROUP", "portions": 6}]}, headers=h)
+    assert r.status_code == 201, r.text
+    # Цена клиента — из его поставок: 3 000 000 / 100 = 30 000
+    assert r.json()["deliveries"] == [{"client": "FOYDALI FOOD GROUP", "portions": 6, "amount": 180000.0}]
+    assert (r.json()["batch"]["given"], r.json()["batch"]["remaining"]) == (6, 4)
+    after = (await client.get("/api/client/invoice", params={"client": "FOYDALI FOOD GROUP"}, headers=auth_headers(OWNER_ID))).json()
+    assert after["charged"] - before["charged"] == 180000
+    async with db() as s:
+        d = (await s.execute(ClientDelivery.__table__.select().where(ClientDelivery.batch_id == bid))).first()
+        assert d.cost == Decimal("9000.00")             # 6 × 1 500
+    r = await client.post(f"/api/batch/{bid}/distribute", json={"items": [{"client": "NO NAMELA", "portions": 5}]}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "not_enough_portions"
+
+
+async def test_leftovers_staff_and_waste_go_to_owner_stats(client, db):
+    bid, _ = await _make_batch(client, db, 10)
+    h = auth_headers(COOK_ID)
+    r = await client.post(f"/api/batch/{bid}/leftover", json={"kind": "waste", "portions": 1}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "reason_required"
+    assert (await client.post(f"/api/batch/{bid}/leftover", json={"kind": "waste", "portions": 1, "reason": "spoiled"}, headers=h)).status_code == 201
+    r = await client.post(f"/api/batch/{bid}/leftover", json={"kind": "staff", "portions": 2}, headers=h)
+    assert (r.json()["batch"]["staff"], r.json()["batch"]["waste"], r.json()["batch"]["remaining"]) == (2, 1, 7)
+    opened = (await client.get("/api/kitchen/open", headers=h)).json()
+    assert any(o["id"] == bid and o["remaining"] == 7 and o["status"] == "fresh" for o in opened)
+    s = (await client.get("/api/stats", headers=auth_headers(OWNER_ID))).json()
+    assert (s["writeoffs"], s["staff_meals"]) == (1500.0, 3000.0)
+    assert s["profit_after_writeoffs"] == s["profit"] - 4500          # валовая прибыль не изменилась
+
+
+async def test_owner_sets_client_price_used_in_distribution(client, db):
+    r = await client.put("/api/clients/price", json={"client": "NO NAMELA", "price": 25000}, headers=auth_headers(OWNER_ID))
+    assert r.status_code == 200 and r.json()["price"] == 25000
+    bid, _ = await _make_batch(client, db, 10)
+    r = await client.post(f"/api/batch/{bid}/distribute", json={"items": [{"client": "NO NAMELA", "portions": 2}]}, headers=auth_headers(COOK_ID))
+    assert r.json()["deliveries"][0]["amount"] == 50000
+    assert (await client.put("/api/clients/price", json={"client": "NO NAMELA", "price": 1}, headers=auth_headers(COOK_ID))).status_code == 403
+
+
+# ------------------------------------------------------------------ Этап 3: меню, закупки, PDF
+
+async def test_week_menu_copy_and_shopping_list(client, db):
+    import datetime as _dt
+
+    _, rid = await _make_batch(client, db, 10)                       # на складе осталось 9 кг риса
+    h = auth_headers(COOK_ID)
+    monday = _dt.date.today() - _dt.timedelta(days=_dt.date.today().weekday()) + _dt.timedelta(days=7)   # следующая неделя
+    r = await client.put("/api/menu/day", json={"date": monday.isoformat(), "items": [
+        {"recipe_id": rid, "client": "NO NAMELA", "portions": 100},
+        {"recipe_id": rid, "client": "FOYDALI FOOD GROUP", "portions": 20}]}, headers=h)
+    assert r.status_code == 200 and r.json()["days"][0]["portions"] == 120
+    shop = (await client.get("/api/menu/shopping", params={"week": monday.isoformat()}, headers=auth_headers(PURCHASER_ID))).json()
+    rice = next(i for i in shop["items"] if i["product"] == "Рис")
+    assert (rice["need"], rice["have"], rice["to_buy"], rice["estimate"]) == (12, 9, 3, 45000)   # 120 порц. × 0,1 кг
+    nxt = monday + _dt.timedelta(days=7)
+    r = await client.post("/api/menu/copy", json={"from_week": monday.isoformat(), "to_week": nxt.isoformat()}, headers=h)
+    assert r.status_code == 200 and r.json()["days"][0]["portions"] == 120
+
+
+async def test_recipe_and_menu_pdfs(client, db, monkeypatch):
+    import datetime as _dt
+
+    import api.notify as notify
+
+    sent = []
+
+    async def fake_send(chat_id, data, filename, caption):
+        sent.append((chat_id, filename, data[:4]))
+
+    monkeypatch.setattr(notify, "send_document", fake_send)
+    _, rid = await _make_batch(client, db, 10)
+    async with db() as s:
+        from api.models import RecipePhoto
+        import io
+        from PIL import Image
+        buf = io.BytesIO(); Image.new("RGB", (40, 30), (200, 100, 50)).save(buf, "JPEG")
+        s.add(RecipePhoto(recipe_id=rid, content=buf.getvalue(), mime="image/jpeg"))
+        await s.commit()
+    h = auth_headers(COOK_ID)
+    assert (await client.post("/api/recipes/pdf-send", headers=h)).status_code == 200
+    today = _dt.date.today()
+    await client.put("/api/menu/day", json={"date": today.isoformat(), "items": [{"recipe_id": rid, "portions": 10}]}, headers=h)
+    assert (await client.post("/api/menu/pdf-send", params={"week": today.isoformat()}, headers=auth_headers(CLIENT_ID))).status_code == 200
+    assert [(c, f[:5], d) for c, f, d in sent] == [(COOK_ID, "recip", b"%PDF"), (CLIENT_ID, "menu_", b"%PDF")]
+
+
+async def test_today_screen_and_reminder_text(client, db):
+    import datetime as _dt
+
+    bid, rid = await _make_batch(client, db, 10)
+    h = auth_headers(COOK_ID)
+    await client.put("/api/menu/day", json={"date": _dt.date.today().isoformat(), "items": [
+        {"recipe_id": rid, "client": "NO NAMELA", "portions": 8}]}, headers=h)
+    today = (await client.get("/api/kitchen/today", headers=h)).json()
+    assert today["plan"][0]["portions"] == 8 and today["plan"][0]["clients"] == {"NO NAMELA": 8}
+    assert today["plan"][0]["cooked"] == 10 and today["batches"][0]["remaining"] == 10
+
+    from bot.reminders import collect_leftovers, reminder_text
+    left = await collect_leftovers()
+    assert any(x["id"] == bid for x in left)
+    text = reminder_text("ru", left)
+    assert "Остались порции" in text and "10 порц." in text

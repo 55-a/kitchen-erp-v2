@@ -19,6 +19,7 @@ from aiogram.types import BotCommand, ErrorEvent, MenuButtonWebApp, WebAppInfo
 from api.config import get_settings
 from api.database import init_db
 from bot.handlers import client, cook, owner, purchaser, start
+from bot.reminders import leftovers_reminder_loop
 from bot.translations import t
 
 log = logging.getLogger("kitchen-bot")
@@ -83,12 +84,15 @@ async def run_polling() -> None:
     await init_db()
     bot = create_bot()
     dp = create_dispatcher()
+    # Вечернее напоминание повару об остатках (фоновая задача в том же процессе)
+    reminder = asyncio.create_task(leftovers_reminder_loop(bot))
     try:
         await set_commands(bot)
         # Сбрасываем накопившиеся апдейты, чтобы после простоя бот не "отвечал на старое"
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot, handle_signals=False)
     finally:
+        reminder.cancel()
         await bot.session.close()
 
 

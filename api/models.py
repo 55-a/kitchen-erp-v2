@@ -54,6 +54,8 @@ class Client(Base):
     name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     # Привязка к аккаунту Telegram (ставит владелец командой /link_client)
     telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, index=True)
+    # Цена порции по договору — для раздачи из партии. Пусто — берётся из последних поставок
+    price_per_portion: Mapped[Decimal | None] = mapped_column(Money)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -114,6 +116,9 @@ class ClientDelivery(Base):
     amount: Mapped[Decimal] = mapped_column(Money, default=Decimal("0"))  # выручка
     cost: Mapped[Decimal] = mapped_column(Money, default=Decimal("0"))  # себестоимость
     date: Mapped[dt.date] = mapped_column(Date, index=True)
+    # Из какой партии раздали (пусто — внесено вручную или из Excel) и кто внёс
+    batch_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    created_by: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -154,6 +159,8 @@ class Batch(Base):
     cost: Mapped[Decimal] = mapped_column(Money, default=Decimal("0"))
     date: Mapped[dt.date] = mapped_column(Date, index=True)
     recipe_version: Mapped[int | None] = mapped_column(Integer)
+    # Годно до: время приготовления + срок годности техкарты
+    expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -239,3 +246,40 @@ class BatchItem(Base):
     unit: Mapped[str] = mapped_column(String(20))
     planned_quantity: Mapped[Decimal | None] = mapped_column(Qty)   # по техкарте
     cost: Mapped[Decimal] = mapped_column(Money, default=Decimal("0"))
+
+
+class BatchMovement(Base):
+    """
+    Куда ушли порции партии: client — раздали клиенту (создаётся поставка),
+    staff — питание персонала, waste — выбросили/списали (причина обязательна).
+    Остаток партии = выход − все движения. «Оставить на завтра» — просто остаток, пока не истёк срок.
+    """
+
+    __tablename__ = "batch_movements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("batches.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))                 # client | staff | waste
+    client_name: Mapped[str | None] = mapped_column(String(255))
+    portions: Mapped[Decimal] = mapped_column(Qty)
+    reason: Mapped[str | None] = mapped_column(String(40))         # spoiled | defect | expired | other
+    cost: Mapped[Decimal] = mapped_column(Money, default=Decimal("0"))   # себестоимость этих порций
+    delivery_id: Mapped[int | None] = mapped_column(Integer)
+    date: Mapped[dt.date] = mapped_column(Date, index=True)
+    created_by: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MenuItem(Base):
+    """Меню на неделю: в какой день какое блюдо и сколько порций (client_name пусто — без привязки к клиенту)."""
+
+    __tablename__ = "menu_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    date: Mapped[dt.date] = mapped_column(Date, index=True)
+    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipes.id", ondelete="CASCADE"), index=True)
+    client_name: Mapped[str | None] = mapped_column(String(255))
+    portions: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[int | None] = mapped_column(BigInteger)
+
+    recipe: Mapped[Recipe] = relationship(lazy="selectin")

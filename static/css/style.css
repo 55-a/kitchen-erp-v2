@@ -979,3 +979,41 @@ th.right, td.right { text-align: right; }
 }
 .recipe-hero.small { height: 140px; font-size: 40px; }
 .photo-pick { display: flex; flex-direction: column; gap: 8px; }
+
+/* ---------- 26. Кухонный цикл: партии с остатком, меню недели ---------- */
+.batch-state {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px; border-radius: var(--radius);
+  background: rgba(51, 65, 85, 0.35); border: 1px solid var(--border);
+}
+.batch-state + .batch-state, .list .batch-state { margin-top: 8px; }
+.batch-state.soon { border-color: rgba(245, 158, 11, 0.6); }
+.batch-state.expired { border-color: rgba(239, 68, 68, 0.7); background: var(--danger-soft); }
+.batch-state.closed { opacity: 0.7; }
+.batch-state .bs-head { display: flex; align-items: center; gap: 10px; }
+.batch-state .bs-head .lead {
+  width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center;
+  border-radius: 12px; background: var(--bg-soft); font-size: 18px;
+}
+.batch-state .bs-head .grow { flex: 1; min-width: 0; }
+.batch-state .bs-head .title { font-weight: 600; }
+.batch-state .bs-head .hint { font-size: 13px; color: var(--text-muted); }
+.batch-state .bs-figures { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; color: var(--text-muted); }
+.batch-state .bs-figures b { color: var(--text); font-variant-numeric: tabular-nums; }
+.batch-state .bs-figures .remain { color: #fcd34d; }
+.batch-state .bs-figures .remain b { color: #fcd34d; }
+.batch-state .bs-actions { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 6px; }
+.batch-state .bs-actions .btn { min-height: 44px; padding: 8px 6px; font-size: 14px; margin: 0; }
+.plan-item .btn.auto { min-height: 44px; padding: 8px 14px; font-size: 14px; }
+
+.menu-days { display: flex; flex-direction: column; gap: 10px; }
+.menu-day { padding: 12px; border-radius: var(--radius); background: rgba(51, 65, 85, 0.35); border: 1px solid var(--border); }
+.menu-day.today { border-color: var(--primary); background: var(--primary-soft); }
+.menu-day .md-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.menu-day .md-head .badge { margin-left: auto; }
+.menu-day .md-item { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; padding: 4px 0; font-size: 14px; }
+.menu-day .btn.ghost { min-height: 44px; margin-top: 6px; }
+.mini-stat.wide { grid-column: 1 / -1; }
+.price-row { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
+.price-row label { white-space: nowrap; }
+.price-row input { min-height: 44px; }

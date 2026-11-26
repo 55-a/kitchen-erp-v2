@@ -86,7 +86,9 @@ NEW_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("shelf_life_hours", "INTEGER DEFAULT 24"),
         ("version", "INTEGER DEFAULT 1"),
     ],
-    "batches": [("recipe_version", "INTEGER")],
+    "batches": [("recipe_version", "INTEGER"), ("expires_at", "TIMESTAMP WITH TIME ZONE")],
+    "clients": [("price_per_portion", "NUMERIC(16, 2)")],
+    "client_deliveries": [("batch_id", "INTEGER"), ("created_by", "BIGINT")],
 }
 
 

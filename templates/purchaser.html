@@ -110,6 +110,13 @@
       </div>
     </section>
 
+    <!-- ===== Что купить на неделю (по меню повара) ===== -->
+    <section class="card" id="shop-card" hidden>
+      <div class="card-head"><h2>📝 <span data-i18n="shopping_list"></span></h2><span class="badge warning" id="shop-total">—</span></div>
+      <p class="small muted" style="margin:0 0 8px" data-i18n="shopping_tap_hint"></p>
+      <div id="shop" class="list"></div>
+    </section>
+
     <!-- ===== Последние закупки ===== -->
     <section class="card">
       <div class="card-head"><h2 data-i18n="recent_purchases"></h2></div>
@@ -250,7 +257,7 @@
         toast(`${t("purchase_saved")} · ${res.product_name} +${fmtQty(res.quantity)} ${res.unit}`);
         $("quantity").value = ""; $("price").value = "";
         updateManualTotal();
-        await Promise.all([loadStock(), loadRecent()]);
+        await Promise.all([loadStock(), loadRecent(), loadShopping()]);
       } catch (e) {
         showError(e);                           // БАГ 2: 400 product_not_found → «Товар не найден в справочнике»
       } finally {
@@ -375,7 +382,7 @@
         }
         renderAiItems();
         toast(t("receipt_saved", { ok: saved, n: items.length }), saved === items.length ? "ok" : "error");
-        await Promise.all([loadStock(), loadRecent()]);
+        await Promise.all([loadStock(), loadRecent(), loadShopping()]);
       } finally {
         unlock();
       }
@@ -465,6 +472,34 @@
       if (b) sendChat(b.dataset.q);
     });
 
+    // ---------- Что купить на неделю: из меню повара (потребность − остаток) ----------
+    async function loadShopping() {
+      try {
+        const s = await api("/api/menu/shopping");
+        const buy = s.items.filter((i) => i.to_buy > 0);
+        $("shop-card").hidden = !s.items.length;
+        $("shop-total").textContent = fmtMoney(s.estimate_total);
+        $("shop").innerHTML = buy.map((i) => `
+          <div class="list-item tappable" data-buy="${i.product_id}" data-qty="${i.to_buy}">
+            <div class="lead">${App.CATEGORY_ICONS[i.category] || "🧺"}</div>
+            <div class="grow"><div class="title">${esc(i.product)}</div>
+              <div class="hint">${esc(t("need"))} ${fmtQty(i.need)} · ${esc(t("in_stock"))} ${fmtQty(i.have)} ${esc(i.unit)} · ≈ ${fmtMoney(i.estimate)}</div></div>
+            <div class="amount text-warning">＋${fmtQty(i.to_buy)} ${esc(i.unit)}</div></div>`).join("")
+          || `<p class="ok">${esc(t("shopping_all_in_stock"))}</p>`;
+      } catch (e) { $("shop-card").hidden = true; }
+    }
+    // Нажатие на строку — заполняем форму ручной закупки этим товаром и количеством
+    $("shop").addEventListener("click", (ev) => {
+      const it = ev.target.closest("[data-buy]");
+      if (!it) return;
+      document.querySelector('.tabs [data-tab="manual"]').click();
+      $("product").value = it.dataset.buy;
+      $("product").dispatchEvent(new Event("change"));
+      $("quantity").value = it.dataset.qty;
+      $("quantity").dispatchEvent(new Event("input"));
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+
     // ---------- Главная кнопка Telegram / своя кнопка ----------
     function updateMainButton() {
       if (!mb) {
@@ -491,6 +526,7 @@
     });
     loadStock();
     loadRecent();
+    loadShopping();
   </script>
 </body>
 </html>

@@ -76,6 +76,7 @@
       <div class="mini-stat tappable" data-explain="cost"><div class="label" data-i18n="cost"></div><div class="value" id="m-cost">—</div></div>
       <div class="mini-stat tappable" data-explain="purchases"><div class="label" data-i18n="purchases_total"></div><div class="value" id="m-purchases">—</div></div>
       <div class="mini-stat tappable" data-explain="stock"><div class="label" data-i18n="stock_value"></div><div class="value" id="m-stock">—</div></div>
+      <div class="mini-stat tappable wide" data-explain="writeoffs"><div class="label" data-i18n="writeoffs_staff"></div><div class="value" id="m-writeoffs">—</div></div>
     </section>
 
     <!-- ===== Быстрые действия ===== -->
@@ -217,6 +218,7 @@
       $("m-cost").textContent = fmtShort(s.cost);
       $("m-purchases").textContent = fmtShort(s.purchases_total);
       $("m-stock").textContent = fmtShort(s.stock_value);
+      $("m-writeoffs").textContent = `${fmtShort((s.writeoffs || 0) + (s.staff_meals || 0))} · ${fmtQty((s.writeoff_portions || 0) + (s.staff_portions || 0))} ${t("portions_short")}`;
       $("chart-period").textContent = periodLabel();
     }
 
@@ -466,12 +468,29 @@
             <div class="mini-stat"><div class="label">${esc(debtLabel)}</div><div class="value ${inv.debt > 0 ? "danger" : "ok"}">${fmtShort(Math.abs(inv.debt))}</div></div>
           </div>
           <div class="small muted">${esc(t("explain_client_debt", { charged: fmtMoney(inv.charged), paid: fmtMoney(inv.paid), debt: fmtMoney(inv.debt) }))}</div>
+          <div class="price-row"><label>💰 ${esc(t("client_price"))}</label>
+            <input type="number" inputmode="numeric" min="0" step="any" data-role="price" placeholder="—">
+            <button type="button" class="btn secondary auto" data-role="price-save">${esc(t("save"))}</button></div>
+          <div class="small muted" style="margin-top:-6px">${esc(t("client_price_hint"))}</div>
           <div class="tabs" style="position:static">
             <button type="button" class="active" data-ct="d">📦 ${esc(t("tab_deliveries"))} · ${items.length}</button>
             <button type="button" data-ct="p">💵 ${esc(t("tab_payments"))} · ${inv.payments.length}</button>
           </div>
           <div class="list" data-cp="d">${list}</div>
           <div class="list" data-cp="p" hidden>${pays}</div>`;
+        // Цена порции клиента: по ней считается выручка при раздаче поваром из партии
+        api("/api/clients/prices").then((list) => {
+          const p = list.find((x) => x.client === name);
+          if (p) body.querySelector('[data-role="price"]').value = p.price || "";
+        }).catch(() => {});
+        body.querySelector('[data-role="price-save"]').addEventListener("click", async (ev) => {
+          const price = parseFloat(body.querySelector('[data-role="price"]').value);
+          if (!(price > 0)) return toast(t("price_required"), "error");
+          const btn = ev.currentTarget;   // после await currentTarget уже null — сохраняем заранее
+          btn.disabled = true;
+          try { await api("/api/clients/price", { method: "PUT", json: { client: name, price } }); toast(t("saved")); }
+          catch (e) { App.showError(e); } finally { btn.disabled = false; }
+        });
         body.querySelectorAll("[data-ct]").forEach((b) => b.addEventListener("click", () => {
           body.querySelectorAll("[data-ct]").forEach((x) => x.classList.toggle("active", x === b));
           body.querySelectorAll("[data-cp]").forEach((p) => { p.hidden = p.dataset.cp !== b.dataset.ct; });
@@ -527,6 +546,14 @@
         title = "🛒 " + t("purchases_total");
         html = period + `<p>${esc(t("explain_purchases", { n: s.purchases_count }))}</p>`
           + explainTable([], [t("total"), fmtMoney(s.purchases_total)]);
+      } else if (kind === "writeoffs") {
+        title = "🗑 " + t("writeoffs_staff");
+        html = period + `<p>${esc(t("explain_writeoffs"))}</p>`
+          + explainTable([[t("writeoffs_waste") + ` · ${fmtQty(s.writeoff_portions || 0)} ${t("portions_short")}`, fmtMoney(s.writeoffs || 0), "danger"],
+                          [t("writeoffs_staff_meals") + ` · ${fmtQty(s.staff_portions || 0)} ${t("portions_short")}`, fmtMoney(s.staff_meals || 0)]],
+            [t("total"), fmtMoney((s.writeoffs || 0) + (s.staff_meals || 0))])
+          + formula(`${esc(t("profit"))} ${fmtMoney(s.profit)} − ${fmtMoney((s.writeoffs || 0) + (s.staff_meals || 0))} = <b>${fmtMoney(s.profit_after_writeoffs ?? s.profit)}</b>`)
+          + `<p class="small muted">${esc(t("explain_writeoffs_note"))}</p>`;
       } else if (kind === "stock") {
         title = "📦 " + t("stock_value");
         let rows = [];

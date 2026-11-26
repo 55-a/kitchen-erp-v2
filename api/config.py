@@ -53,6 +53,8 @@ class Settings:
     font_dir: str = ""
     # Telegram-ник поддержки (без @) — кнопка «Поддержка» в Mini App. Пусто — кнопка скрыта.
     support_telegram: str = ""
+    # Во сколько (час по Ташкенту) бот напоминает повару об остатках готовой еды
+    reminder_hour: int = 17
 
     @property
     def async_database_url(self) -> str:
@@ -82,4 +84,5 @@ def get_settings() -> Settings:
         default_language=os.getenv("DEFAULT_LANGUAGE", "ru"),
         font_dir=os.getenv("FONT_DIR", ""),
         support_telegram=os.getenv("SUPPORT_TELEGRAM", "").strip().lstrip("@"),
+        reminder_hour=int(os.getenv("REMINDER_HOUR", "17")),
     )

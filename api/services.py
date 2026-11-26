@@ -12,7 +12,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.models import Batch, BatchItem, Client, ClientDelivery, Payment, Purchase, Recipe, Stock
+from api.models import Batch, BatchItem, BatchMovement, Client, ClientDelivery, Payment, Purchase, Recipe, Stock
 from api.units import UnitMismatch, convert, normalize_unit
 
 ALLOWED_PAYMENT_METHODS = {"cash", "card", "transfer"}
@@ -242,6 +242,8 @@ async def create_batch(
     batch = Batch(
         recipe_id=recipe.id,
         recipe_version=recipe.version or 1,
+        # Годно до = сейчас + срок годности техкарты (по умолчанию 24 ч)
+        expires_at=dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=recipe.shelf_life_hours or 24),
         planned_yield=Decimal(planned_yield),
         actual_yield=Decimal(actual_yield) if actual_yield is not None else None,
         cost=total_cost.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
@@ -323,6 +325,15 @@ async def compute_stats(
         purchases_count_stmt = purchases_count_stmt.where(Purchase.date <= date_to)
     purchases_count = (await session.execute(purchases_count_stmt)).scalar_one()
     stock_items = (await session.execute(select(func.count()).select_from(Stock).where(Stock.quantity > 0))).scalar_one()
+    # Списания и питание персонала из партий (этап 2) — отдельными строками, валовую прибыль не меняют
+    mv_stmt = select(BatchMovement.kind, func.coalesce(func.sum(BatchMovement.cost), 0), func.coalesce(func.sum(BatchMovement.portions), 0)).where(BatchMovement.kind.in_(("waste", "staff")))
+    if date_from:
+        mv_stmt = mv_stmt.where(BatchMovement.date >= date_from)
+    if date_to:
+        mv_stmt = mv_stmt.where(BatchMovement.date <= date_to)
+    mv = {k: (Decimal(c or 0), Decimal(p or 0)) for k, c, p in (await session.execute(mv_stmt.group_by(BatchMovement.kind))).all()}
+    waste_cost, waste_portions = mv.get("waste", (Decimal("0"), Decimal("0")))
+    staff_cost, staff_portions = mv.get("staff", (Decimal("0"), Decimal("0")))
 
     all_client_names = set(clients) | set(paid_by_client) | set(charged_by_client)
     known = (await session.execute(select(Client.name))).scalars().all()
@@ -340,6 +351,9 @@ async def compute_stats(
         "deliveries_count": len(rows),
         "purchases_count": purchases_count,
         "stock_items": stock_items,
+        "writeoffs": money(waste_cost), "writeoff_portions": qty(waste_portions),
+        "staff_meals": money(staff_cost), "staff_portions": qty(staff_portions),
+        "profit_after_writeoffs": money(profit - waste_cost - staff_cost),
         "by_month": [
             {
                 "month": m,

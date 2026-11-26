@@ -33,19 +33,31 @@
     <!-- ===== Главные действия повара ===== -->
     <section class="quick-actions four">
       <button type="button" class="quick-action" id="qa-today"><span class="qa-icon">🍳</span><span data-i18n="qa_today"></span></button>
+      <button type="button" class="quick-action" id="qa-menu"><span class="qa-icon">🗓</span><span data-i18n="qa_menu"></span></button>
+      <button type="button" class="quick-action" id="qa-leftovers"><span class="qa-icon">📦</span><span data-i18n="qa_leftovers"></span></button>
       <button type="button" class="quick-action" id="qa-raw"><span class="qa-icon">🥕</span><span data-i18n="qa_raw"></span></button>
       <button type="button" class="quick-action" id="qa-inventory"><span class="qa-icon">📋</span><span data-i18n="qa_inventory"></span></button>
       <button type="button" class="quick-action" id="qa-recipe"><span class="qa-icon">➕</span><span data-i18n="qa_new_recipe"></span></button>
+      <button type="button" class="quick-action" id="qa-recipes-pdf"><span class="qa-icon">📖</span><span data-i18n="qa_recipes_pdf"></span></button>
+      <button type="button" class="quick-action" id="qa-menu-pdf"><span class="qa-icon">📄</span><span data-i18n="qa_menu_pdf"></span></button>
     </section>
 
-    <!-- ===== Сегодня ===== -->
+    <!-- ===== Сегодня: план по меню + партии дня ===== -->
     <section class="card" id="today-section">
       <div class="card-head"><h2>🍳 <span data-i18n="today_title"></span></h2><span class="hint" id="today-date"></span></div>
+      <div id="today-plan" class="list"></div>
       <div id="today" class="list"></div>
       <div class="row" style="margin-top:12px">
         <button type="button" class="btn" id="today-new">＋ <span data-i18n="new_batch"></span></button>
         <button type="button" class="btn secondary" id="today-repeat">🔁 <span data-i18n="repeat_yesterday"></span></button>
       </div>
+    </section>
+
+    <!-- ===== Остатки: что не раздали, срок годности ===== -->
+    <section class="card" id="leftovers-section">
+      <div class="card-head"><h2>📦 <span data-i18n="leftovers_title"></span></h2><span class="badge" id="leftovers-count">—</span></div>
+      <p class="small muted" style="margin:0 0 8px" data-i18n="leftovers_hint"></p>
+      <div id="leftovers" class="list"></div>
     </section>
 
     <!-- ===== Техкарты ===== -->
@@ -109,7 +121,7 @@
 
     // ---------- Загрузка ----------
     async function loadAll() {
-      await Promise.all([loadRecipes(), loadStock(), loadBatches()]);
+      await Promise.all([loadRecipes(), loadStock(), loadBatches(), loadKitchen()]);
     }
     async function loadRecipes() {
       try {
@@ -125,8 +137,17 @@
     }
     async function loadBatches() {
       try { batches = await api("/api/batch", { query: { limit: 60 } }); } catch (e) { batches = []; }
-      renderToday();
       renderHistory();
+      $("today-repeat").disabled = !batches.some((b) => b.date < App.today());
+    }
+    /** «Сегодня» (меню + партии дня с остатками) и «Остатки» (все открытые партии) */
+    let kitchen = { plan: [], batches: [], clients: [] };
+    let openList = [];
+    async function loadKitchen() {
+      try { kitchen = await api("/api/kitchen/today"); } catch (e) { kitchen = { plan: [], batches: [], clients: [] }; }
+      try { openList = await api("/api/kitchen/open"); } catch (e) { openList = []; }
+      renderToday();
+      renderLeftovers();
     }
 
     // ---------- Техкарты ----------
@@ -311,7 +332,10 @@
                 date: body.querySelector('[name="date"]').value || App.today(),
               } });
               toast(`${t("batch_created")} · ${fmtMoney(res.cost)}`);
-              await Promise.all([loadStock(), loadRecipes(), loadBatches()]);
+              await Promise.all([loadStock(), loadRecipes(), loadBatches(), loadKitchen()]);
+              // Сразу предлагаем раздать: клиенты и порции подставятся из меню на сегодня
+              const st = kitchen.batches.find((x) => x.id === res.id);
+              if (st) setTimeout(() => openDistribute(st), 300);
             } catch (e) {
               showError(e);
               return false;   // окно остаётся открытым, чтобы поправить количества
@@ -633,16 +657,300 @@
           <div class="amount">${fmtMoney(b.cost)}</div>
         </div>`;
     }
-    function renderToday() {
-      const today = App.today();
-      $("today-date").textContent = fmtDate(today);
-      const list = batches.filter((b) => b.date === today);
-      $("today").innerHTML = list.map(batchRow).join("") || App.emptyHtml("🍳", "no_batches_today");
-      $("today-repeat").disabled = !batches.some((b) => b.date < today);
-    }
     function renderHistory() {
       const today = App.today();
       $("history").innerHTML = batches.filter((b) => b.date !== today).slice(0, 20).map(batchRow).join("") || App.emptyHtml("🍳", "no_batches");
+    }
+
+    /** Строка партии с остатком: сколько раздали, осталось, годно до + кнопки действий */
+    function stateRow(s) {
+      const until = s.expires_at ? new Date(s.expires_at) : null;
+      const untilTxt = until ? until.toLocaleString(I18N.lang === "en" ? "en-GB" : "ru-RU", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : "—";
+      const badge = { fresh: ["ok", "✅ " + t("st_fresh")], soon: ["warning", "⏳ " + t("st_soon", { h: Math.max(0, Math.round(s.hours_left)) })],
+        expired: ["danger", "⛔ " + t("st_expired")], closed: ["info", "✔ " + t("st_closed")] }[s.status];
+      const done = s.status === "closed";
+      return `
+        <div class="batch-state ${s.status}">
+          <div class="bs-head">
+            <div class="lead">${iconFor(s.recipe || "")}</div>
+            <div class="grow"><div class="title">${esc(s.recipe || "—")}</div>
+              <div class="hint">${fmtDate(s.date)} · ${esc(t("good_until"))} ${esc(untilTxt)}</div></div>
+            <span class="badge ${badge[0]}">${esc(badge[1])}</span>
+          </div>
+          <div class="bs-figures">
+            <span>${esc(t("cooked"))} <b>${fmtQty(s.yield)}</b></span>
+            <span>🚚 <b>${fmtQty(s.given)}</b></span>
+            <span>🍽 <b>${fmtQty(s.staff)}</b></span>
+            <span>🗑 <b>${fmtQty(s.waste)}</b></span>
+            <span class="${done ? "" : "remain"}">${esc(t("left"))} <b>${fmtQty(s.remaining)}</b></span>
+          </div>
+          ${done ? "" : `<div class="bs-actions">
+            <button type="button" class="btn" data-act="give" data-bid="${s.id}">🚚 ${esc(t("act_give"))}</button>
+            <button type="button" class="btn secondary" data-act="staff" data-bid="${s.id}">🍽 ${esc(t("act_staff"))}</button>
+            <button type="button" class="btn secondary" data-act="waste" data-bid="${s.id}">🗑 ${esc(t("act_waste"))}</button>
+          </div>`}
+        </div>`;
+    }
+
+    function renderToday() {
+      const today = App.today();
+      $("today-date").textContent = fmtDate(today);
+      // План по меню: блюдо, сколько надо (по клиентам), сколько уже приготовлено, кнопка «Начать»
+      $("today-plan").innerHTML = kitchen.plan.map((p) => {
+        const left = Math.max(0, p.portions - p.cooked);
+        const clients = Object.entries(p.clients || {}).map(([c, n]) => `${esc(c)}: ${n}`).join(" · ");
+        return `
+          <div class="list-item plan-item">
+            <div class="lead">${iconFor(p.recipe)}</div>
+            <div class="grow"><div class="title">${esc(p.recipe)}</div>
+              <div class="hint">🗓 ${esc(t("by_menu"))}: ${fmtQty(p.portions)} ${esc(t("portions_short"))}${clients ? " — " + clients : ""} · ${esc(t("cooked"))}: ${fmtQty(p.cooked)}</div></div>
+            ${left > 0 ? `<button type="button" class="btn auto" data-start="${p.recipe_id}" data-portions="${left}">🍳 ${fmtQty(left)}</button>` : `<span class="badge ok">✅</span>`}
+          </div>`;
+      }).join("");
+      $("today").innerHTML = kitchen.batches.map(stateRow).join("")
+        || (kitchen.plan.length ? "" : App.emptyHtml("🍳", "no_batches_today"));
+    }
+
+    function renderLeftovers() {
+      $("leftovers-count").textContent = openList.length;
+      $("leftovers-count").className = "badge " + (openList.some((s) => s.status === "expired") ? "danger" : openList.length ? "warning" : "ok");
+      $("leftovers").innerHTML = openList.map(stateRow).join("") || App.emptyHtml("✨", "no_leftovers");
+    }
+
+    // Кнопки «Начать» (по меню) и действия с партиями — в обоих блоках
+    ["today-plan", "today", "leftovers"].forEach((id) => $(id).addEventListener("click", (ev) => {
+      const start = ev.target.closest("[data-start]");
+      if (start) {
+        const r = recipes.find((x) => String(x.id) === start.dataset.start);
+        if (r) openBatch(r, Number(start.dataset.portions));
+        return;
+      }
+      const b = ev.target.closest("[data-act]");
+      if (!b) return;
+      const s = kitchen.batches.concat(openList).find((x) => String(x.id) === b.dataset.bid);
+      if (!s) return;
+      if (b.dataset.act === "give") openDistribute(s); else openLeftover(s, b.dataset.act);
+    }));
+
+    /** Раздача клиентам: порции подставлены из меню на сегодня (не больше остатка) */
+    function openDistribute(s) {
+      const planned = (kitchen.plan.find((p) => p.recipe_id === s.recipe_id) || {}).clients || {};
+      let budget = s.remaining;
+      const rows = (kitchen.clients.length ? kitchen.clients : Object.keys(planned)).map((c) => {
+        const want = Math.min(planned[c] || 0, budget);
+        budget -= want;
+        return { client: c, portions: want };
+      });
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = `
+        <div class="total-big"><span class="label">${esc(t("left"))}</span><span class="value" data-role="left">${fmtQty(s.remaining - rows.reduce((a, r) => a + (r.portions || 0), 0))}</span></div>
+        <p class="small muted">${esc(t("distribute_hint"))}</p>
+        <div class="usage-list">${rows.map((r, i) => `
+          <div class="usage-row">
+            <div class="u-name"><b>${esc(r.client)}</b>${planned[r.client] ? `<div class="small muted">🗓 ${esc(t("by_menu"))}: ${planned[r.client]}</div>` : ""}</div>
+            <div class="u-input"><input type="number" inputmode="numeric" min="0" step="1" data-c="${i}" value="${r.portions || ""}" placeholder="0"><span class="u-unit">${esc(t("portions_short"))}</span></div>
+          </div>`).join("")}</div>`;
+      const sum = () => rows.reduce((a, r) => a + (parseFloat(r.portions) || 0), 0);
+      body.addEventListener("input", (ev) => {
+        if (ev.target.dataset.c === undefined) return;
+        rows[ev.target.dataset.c].portions = ev.target.value;
+        const left = s.remaining - sum();
+        const el = body.querySelector('[data-role="left"]');
+        el.textContent = fmtQty(left);
+        el.className = "value " + (left < 0 ? "danger" : "");
+      });
+      modal({ title: `🚚 ${s.recipe}`, body, actions: [
+        { label: t("cancel"), kind: "secondary" },
+        { label: "🚚 " + t("act_give"), onClick: async () => {
+          const items = rows.filter((r) => parseFloat(r.portions) > 0).map((r) => ({ client: r.client, portions: parseFloat(r.portions) }));
+          if (!items.length) { toast(t("quantity_required"), "error"); return false; }
+          if (sum() > s.remaining) { toast(t("err_not_enough_portions"), "error"); return false; }
+          const text = items.map((i) => `${esc(i.client)}: <b>${fmtQty(i.portions)}</b>`).join("<br>");
+          if (!(await confirm(`${esc(t("confirm_give", { dish: s.recipe }))}<br><br>${text}`, { icon: "🚚", okLabel: t("act_give") }))) return false;
+          try {
+            await api(`/api/batch/${s.id}/distribute`, { json: { items } });
+            toast(t("given_ok", { n: fmtQty(sum()) }));
+            await loadKitchen();
+          } catch (e) { showError(e); return false; }
+        } },
+      ] });
+    }
+
+    /** «Персоналу» или «Выбросить» (с причиной) */
+    function openLeftover(s, kind) {
+      const reasons = ["spoiled", "expired", "defect", "other"];
+      let reason = s.status === "expired" ? "expired" : null;
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = `
+        <div class="field"><label>${esc(t("portions_count"))} (${esc(t("left"))}: ${fmtQty(s.remaining)})</label>
+          <input name="n" type="number" inputmode="numeric" min="1" step="1" value="${s.remaining}"></div>
+        ${kind === "waste" ? `<div class="field"><label>${esc(t("waste_reason"))}</label>
+          <div class="chips" data-role="reasons">${reasons.map((r) => `<button type="button" class="chip ${r === reason ? "active" : ""}" data-r="${r}">${esc(t("reason_" + r))}</button>`).join("")}</div></div>`
+          : `<p class="small muted">${esc(t("staff_hint"))}</p>`}
+        <div class="small muted">${esc(t("leftover_cost_hint", { amount: fmtMoney(s.cost_per_portion) }))}</div>`;
+      body.addEventListener("click", (ev) => {
+        const c = ev.target.closest("[data-r]");
+        if (!c) return;
+        reason = c.dataset.r;
+        body.querySelectorAll("[data-r]").forEach((x) => x.classList.toggle("active", x === c));
+      });
+      modal({ title: `${kind === "waste" ? "🗑 " + t("act_waste") : "🍽 " + t("act_staff")} · ${s.recipe}`, body, actions: [
+        { label: t("cancel"), kind: "secondary" },
+        { label: kind === "waste" ? "🗑 " + t("act_waste") : "🍽 " + t("act_staff"), kind: kind === "waste" ? "danger" : "primary", onClick: async () => {
+          const n = parseFloat(body.querySelector('[name="n"]').value);
+          if (!(n > 0) || n > s.remaining) { toast(t("err_not_enough_portions"), "error"); return false; }
+          if (kind === "waste" && !reason) { toast(t("err_reason_required"), "error"); return false; }
+          try {
+            await api(`/api/batch/${s.id}/leftover`, { json: { kind, portions: n, reason: kind === "waste" ? reason : null } });
+            toast(t(kind === "waste" ? "waste_ok" : "staff_ok", { n: fmtQty(n) }));
+            await loadKitchen();
+          } catch (e) { showError(e); return false; }
+        } },
+      ] });
+    }
+
+    // ---------- Меню на неделю ----------
+    function mondayOf(iso) {
+      const d = new Date(iso + "T00:00:00");
+      d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+    function addDays(iso, n) {
+      const d = new Date(iso + "T00:00:00");
+      d.setDate(d.getDate() + n);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+
+    async function openWeekMenu(week = mondayOf(App.today())) {
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = `
+        <div class="card-head" style="margin:0">
+          <button type="button" class="icon-btn" data-nav="-7">‹</button>
+          <b data-role="week"></b>
+          <button type="button" class="icon-btn" data-nav="7">›</button>
+        </div>
+        <div class="row">
+          <button type="button" class="btn secondary" data-role="copy">🔁 ${esc(t("copy_last_week"))}</button>
+          <button type="button" class="btn secondary" data-role="shop">🛒 ${esc(t("shopping_list"))}</button>
+        </div>
+        <div data-role="days" class="menu-days"></div>`;
+      let data = null;
+      const clientsList = kitchen.clients || [];
+      async function load() {
+        body.querySelector('[data-role="days"]').innerHTML = App.skeletonHtml(5);
+        data = await api("/api/menu", { query: { week } });
+        draw();
+      }
+      function draw() {
+        body.querySelector('[data-role="week"]').textContent = `${fmtDate(week)} — ${fmtDate(addDays(week, 4))}`;
+        body.querySelector('[data-role="days"]').innerHTML = data.days.map((d, di) => `
+          <div class="menu-day ${d.date === App.today() ? "today" : ""}">
+            <div class="md-head"><b>${esc(t("wd_" + d.weekday))}</b> <span class="muted">${fmtDate(d.date)}</span>
+              <span class="badge">${fmtQty(d.portions)} ${esc(t("portions_short"))}</span></div>
+            ${d.items.map((it, ii) => `
+              <div class="md-item"><span>${iconFor(it.recipe)} ${esc(it.recipe)}</span>
+                <span class="muted small">${esc(it.client || t("all_clients"))}</span>
+                <b>${fmtQty(it.portions)}</b>
+                <button type="button" class="icon-btn small" data-del="${di}:${ii}" aria-label="delete">✕</button></div>`).join("")}
+            <button type="button" class="btn ghost" data-add="${di}">＋ ${esc(t("add_dish"))}</button>
+          </div>`).join("");
+      }
+      async function saveDay(di) {
+        const d = data.days[di];
+        data = await api("/api/menu/day", { method: "PUT", json: { date: d.date, items: d.items.map((x) => ({ recipe_id: x.recipe_id, client: x.client, portions: x.portions })) } });
+        draw();
+      }
+      body.addEventListener("click", async (ev) => {
+        const nav = ev.target.closest("[data-nav]");
+        if (nav) { week = addDays(week, Number(nav.dataset.nav)); return load(); }
+        const del = ev.target.closest("[data-del]");
+        if (del) {
+          const [di, ii] = del.dataset.del.split(":").map(Number);
+          data.days[di].items.splice(ii, 1);
+          try { await saveDay(di); } catch (e) { showError(e); }
+          return;
+        }
+        const add = ev.target.closest("[data-add]");
+        if (add) {
+          const item = await pickMenuItem(clientsList);
+          if (!item) return;
+          data.days[Number(add.dataset.add)].items.push(item);
+          try { await saveDay(Number(add.dataset.add)); toast(t("saved")); } catch (e) { showError(e); }
+          return;
+        }
+        if (ev.target.closest('[data-role="copy"]')) {
+          const from = addDays(week, -7);
+          if (!(await confirm(esc(t("copy_week_confirm", { from: fmtDate(from), to: fmtDate(week) })), { icon: "🔁" }))) return;
+          try { data = await api("/api/menu/copy", { json: { from_week: from, to_week: week } }); draw(); toast(t("saved")); }
+          catch (e) { showError(e); }
+          return;
+        }
+        if (ev.target.closest('[data-role="shop"]')) openShopping(week);
+      });
+      modal({ title: "🗓 " + t("qa_menu"), body, onClose: () => loadKitchen() });
+      try { await load(); } catch (e) { body.querySelector('[data-role="days"]').innerHTML = `<div class="error-box">${esc(errorText(e))}</div>`; }
+    }
+
+    /** Добавить блюдо в меню дня: техкарта, клиент (или «все»), порции */
+    function pickMenuItem(clientsList) {
+      return new Promise((resolve) => {
+        let result = null;
+        const body = document.createElement("div");
+        body.className = "form";
+        body.innerHTML = `
+          <div class="field"><label>${esc(t("dish"))}</label>
+            <select name="recipe">${recipes.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("")}</select></div>
+          <div class="row">
+            <div class="field"><label>${esc(t("client"))}</label>
+              <select name="client"><option value="">${esc(t("all_clients"))}</option>${clientsList.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></div>
+            <div class="field"><label>${esc(t("portions_count"))}</label><input name="n" type="number" inputmode="numeric" min="1" step="1" value="20"></div>
+          </div>`;
+        modal({ title: "＋ " + t("add_dish"), body, onClose: () => resolve(result), actions: [
+          { label: t("cancel"), kind: "secondary" },
+          { label: t("add"), onClick: () => {
+            const n = parseInt(body.querySelector('[name="n"]').value, 10);
+            if (!(n > 0)) { toast(t("quantity_required"), "error"); return false; }
+            const rid = Number(body.querySelector('[name="recipe"]').value);
+            result = { recipe_id: rid, recipe: (recipes.find((r) => r.id === rid) || {}).name, client: body.querySelector('[name="client"]').value || null, portions: n };
+          } },
+        ] });
+      });
+    }
+
+    /** Список закупок на неделю по меню (его же видит закупщик) */
+    async function openShopping(week) {
+      const body = document.createElement("div");
+      body.className = "form";
+      body.innerHTML = App.skeletonHtml(4);
+      modal({ title: "🛒 " + t("shopping_list"), body });
+      try {
+        const s = await api("/api/menu/shopping", { query: { week } });
+        body.innerHTML = shoppingHtml(s);
+      } catch (e) { body.innerHTML = `<div class="error-box">${esc(errorText(e))}</div>`; }
+    }
+    function shoppingHtml(s) {
+      if (!s.items.length) return App.emptyHtml("🗓", "shopping_empty");
+      const buy = s.items.filter((i) => i.to_buy > 0);
+      return `
+        <div class="total-big"><span class="label">${esc(t("shopping_total"))}</span><span class="value">${fmtMoney(s.estimate_total)}</span></div>
+        <p class="small muted">${esc(t("shopping_hint", { from: fmtDate(s.from), n: s.dishes }))}</p>
+        <div class="list">${s.items.map((i) => `
+          <div class="list-item"><div class="lead">${App.CATEGORY_ICONS[i.category] || "🧺"}</div>
+            <div class="grow"><div class="title">${esc(i.product)}</div>
+              <div class="hint">${esc(t("need"))} ${fmtQty(i.need)} · ${esc(t("in_stock"))} ${fmtQty(i.have)} ${esc(i.unit)}</div></div>
+            <div class="amount ${i.to_buy > 0 ? "text-warning" : "ok"}">${i.to_buy > 0 ? "＋" + fmtQty(i.to_buy) + " " + esc(i.unit) : "✅"}</div></div>`).join("")}</div>
+        ${buy.length ? "" : `<p class="ok">${esc(t("shopping_all_in_stock"))}</p>`}`;
+    }
+
+    /** PDF техкарт / меню — бот присылает файл в чат */
+    async function sendPdf(path, okKey, btn) {
+      btn.disabled = true;
+      try { await api(path, { method: "POST", query: path.includes("menu") ? { week: mondayOf(App.today()) } : undefined }); toast(t(okKey)); }
+      catch (e) { showError(e); }
+      finally { btn.disabled = false; }
     }
 
     /** «Новая партия» — выбор блюда из техкарт */
@@ -686,13 +994,18 @@
     $("qa-recipe").addEventListener("click", () => openRecipeEditor(null));
     $("today-new").addEventListener("click", pickRecipe);
     $("today-repeat").addEventListener("click", repeatYesterday);
+    $("qa-menu").addEventListener("click", () => openWeekMenu());
+    $("qa-leftovers").addEventListener("click", () => $("leftovers-section").scrollIntoView({ behavior: "smooth", block: "start" }));
+    $("qa-recipes-pdf").addEventListener("click", (ev) => sendPdf("/api/recipes/pdf-send", "recipes_pdf_sent", ev.currentTarget));
+    $("qa-menu-pdf").addEventListener("click", (ev) => sendPdf("/api/menu/pdf-send", "menu_pdf_sent", ev.currentTarget));
 
     renderCats();
-    loadAll();
-    // Кнопки бота открывают ?tab=batch / recipes / history — прокручиваем к нужному блоку
+    // Кнопки бота открывают ?tab=batch / recipes / history / leftovers — прокручиваем к нужному блоку
     const tab = new URLSearchParams(location.search).get("tab");
-    if (tab === "recipes") $("recipes-section").scrollIntoView({ block: "start" });
-    if (tab === "history") $("history-section").scrollIntoView({ block: "start" });
+    loadAll().then(() => {
+      const target = { recipes: "recipes-section", history: "history-section", leftovers: "leftovers-section" }[tab];
+      if (target) $(target).scrollIntoView({ block: "start" });
+    });
   </script>
 </body>
 </html>
