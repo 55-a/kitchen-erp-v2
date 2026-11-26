@@ -403,14 +403,24 @@
       chatHistory.push({ role: "user", text });
       $("chat-text").value = ""; autoGrow();
       renderChat(true);
+      // Если Google перегружен, ответ может идти дольше — через 12 с говорим об этом под «…»
+      const slowTimer = setTimeout(() => {
+        const dots = document.querySelector("#chat-log .typing");
+        if (dots) dots.insertAdjacentHTML("afterend", `<div class="small muted" style="margin-top:4px">${esc(t("ai_slow"))}</div>`);
+      }, 12000);
       try {
         // Ошибки (503 — ИИ недоступен, 429 — лимит) не попадают в историю, которую видит модель
         const payload = chatHistory.filter((m) => !m.error).slice(-16).map(({ role, text }) => ({ role, text }));
-        const res = await api("/api/ai/chat", { json: { messages: payload } });
+        // Сервер сам ограничивает ответ ~50 с; приложение ждёт не дольше 70 с
+        const res = await api("/api/ai/chat", { json: { messages: payload }, timeout: 70000 });
         chatHistory.push({ role: "assistant", text: res.answer });
       } catch (e) {
-        chatHistory.push({ role: "assistant", text: errorText(e), error: true });
+        // Понятные сообщения для чата вместо общих текстов про «распознавание»
+        const text = e.status === 503 || e.status === 502 ? t("ai_busy")
+          : e.status === 408 || e.status === 0 ? t("ai_timeout") : errorText(e);
+        chatHistory.push({ role: "assistant", text, error: true });
       } finally {
+        clearTimeout(slowTimer);
         chatBusy = false;
         $("chat-send").disabled = false;
         sessionStorage.setItem(CHAT_KEY, JSON.stringify(chatHistory.slice(-40)));

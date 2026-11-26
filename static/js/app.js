@@ -43,11 +43,17 @@
       if (qs) url += (url.includes("?") ? "&" : "?") + qs;
     }
 
+    // opts.timeout (мс) — не ждать ответа бесконечно: по истечении запрос отменяется (status 408)
+    const ctrl = opts.timeout ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), opts.timeout) : null;
     let resp;
     try {
-      resp = await fetch(url, { method: opts.method || (body ? "POST" : "GET"), headers, body });
+      resp = await fetch(url, { method: opts.method || (body ? "POST" : "GET"), headers, body, signal: ctrl ? ctrl.signal : undefined });
     } catch (e) {
+      if (ctrl && ctrl.signal.aborted) throw new ApiError(408, null);   // не дождались ответа
       throw new ApiError(0, null); // сеть недоступна
+    } finally {
+      if (timer) clearTimeout(timer);
     }
 
     // Сначала проверяем статус, и только потом парсим тело

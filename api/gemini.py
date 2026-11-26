@@ -158,25 +158,46 @@ async def parse_receipt(image_bytes: bytes, mime_type: str = "image/jpeg") -> li
         raise ReceiptParseError("invalid JSON from Gemini") from exc
 
 
-async def _generate(payload: dict, purpose: str) -> str:
+async def _generate(
+    payload: dict,
+    purpose: str,
+    *,
+    per_model_timeout: float = 40.0,
+    deadline: float | None = None,
+    models: list[str] | None = None,
+) -> str:
     """
     Отправляет запрос в Gemini и возвращает текст ответа.
     Google регулярно выводит старые модели из обращения (404) и отвечает 503 при перегрузке
     новых. Поэтому пробуем по очереди: GEMINI_MODEL (можно несколько через запятую),
     затем запасные модели. Неверный ключ (400/401/403) — сразу ошибка, перебор не поможет.
+
+    per_model_timeout — сколько ждать одну модель; deadline — общий лимит в секундах на весь
+    перебор (чат не должен «висеть» минуту: пользователь закроет приложение раньше).
     """
     settings = get_settings()
     resp = None
     last_error = "no models"
-    async with httpx.AsyncClient(timeout=httpx.Timeout(40.0, connect=10.0)) as client:
-        for model in _model_chain(settings.gemini_model):
+    started = time.monotonic()
+    async with httpx.AsyncClient() as client:
+        for model in models or _model_chain(settings.gemini_model):
+            timeout = per_model_timeout
+            if deadline is not None:
+                left = deadline - (time.monotonic() - started)
+                if left < 3:                       # времени на ещё одну модель не осталось
+                    last_error = "deadline exceeded"
+                    break
+                timeout = min(timeout, left)
             try:
                 resp = await client.post(
-                    GEMINI_URL.format(model=model), json=payload, headers={"x-goog-api-key": settings.gemini_api_key}
+                    GEMINI_URL.format(model=model), json=payload,
+                    headers={"x-goog-api-key": settings.gemini_api_key},
+                    timeout=httpx.Timeout(timeout, connect=min(10.0, timeout)),
                 )
             except httpx.HTTPError as exc:
-                log.warning("Gemini %s network error: %s", model, exc)
-                last_error, resp = str(exc), None
+                # У ReadTimeout пустой текст — пишем тип ошибки, чтобы в логах было видно, что случилось
+                log.warning("Gemini %s network error (%.0fs): %s %s", model, timeout, type(exc).__name__, exc)
+                last_error, resp = type(exc).__name__, None
                 continue
             if resp.status_code == 200:
                 log.info("Gemini %s: %s ok", model, purpose)
@@ -202,6 +223,9 @@ async def _generate(payload: dict, purpose: str) -> str:
 
 CHAT_MAX_TURNS = 16          # сколько последних сообщений диалога отправляем модели
 CHAT_MAX_CHARS = 2000        # максимальная длина одного сообщения пользователя
+CHAT_MODEL_TIMEOUT = 15.0    # сколько ждать одну модель в чате, секунд
+CHAT_DEADLINE = 50.0         # общий лимит на ответ чата, секунд (приложение ждёт 70)
+CHAT_FAST_MODEL = "gemini-3.1-flash-lite"   # быстрая запасная модель — вторая в очереди
 
 
 async def chat(history: list[dict], system: str) -> str:
@@ -224,7 +248,14 @@ async def chat(history: list[dict], system: str) -> str:
         "contents": contents,
         "generationConfig": {"temperature": 0.6, "maxOutputTokens": 8192},   # с запасом: «думающие» модели тратят часть лимита на размышления
     }
-    text = (await _generate(payload, purpose="chat")).strip()
+    # Для чата важна скорость: быстрая «lite»-модель идёт второй, каждую ждём до 15 с,
+    # а весь перебор — не дольше CHAT_DEADLINE (иначе пользователь видит бесконечные «…»)
+    chain = _model_chain(settings.gemini_model)
+    if CHAT_FAST_MODEL in chain:
+        chain.remove(CHAT_FAST_MODEL)
+    chain.insert(min(1, len(chain)), CHAT_FAST_MODEL)
+    text = (await _generate(payload, purpose="chat", per_model_timeout=CHAT_MODEL_TIMEOUT,
+                            deadline=CHAT_DEADLINE, models=chain)).strip()
     if not text:
         raise ReceiptParseError("empty chat answer")
     return text

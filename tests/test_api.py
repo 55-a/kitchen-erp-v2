@@ -288,3 +288,36 @@ async def test_ai_chat_rules(client):
     assert (await client.post("/api/ai/chat", json=msgs, headers=auth_headers(CLIENT_ID))).status_code == 403
     bad = {"messages": [{"role": "user", "text": "a"}, {"role": "assistant", "text": "b"}]}
     assert (await client.post("/api/ai/chat", json=bad, headers=auth_headers(PURCHASER_ID))).status_code == 400
+
+
+async def test_ai_chat_skips_hanging_model_and_uses_fast_one(monkeypatch):
+    """Google перегружен: первая модель «висит» — чат не ждёт минуту, а сразу берёт быструю lite-модель."""
+    import dataclasses
+
+    import httpx
+
+    import api.gemini as gemini
+
+    calls = []
+
+    class FakeClient:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json, headers, timeout):
+            model = url.split("/models/")[1].split(":")[0]
+            calls.append((model, timeout.read))
+            if len(calls) == 1:
+                raise httpx.ReadTimeout("slow")
+            return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "Ответ ✅"}]}}]},
+                                  request=httpx.Request("POST", url))
+
+    settings = dataclasses.replace(gemini.get_settings(), gemini_api_key="test-key", gemini_model="gemini-3.5-flash")
+    monkeypatch.setattr(gemini, "get_settings", lambda: settings)
+    monkeypatch.setattr(gemini.httpx, "AsyncClient", FakeClient)
+    gemini._limiter._calls.clear()
+
+    answer = await gemini.chat([{"role": "user", "text": "привет"}], "system")
+    assert answer == "Ответ ✅"
+    assert [m for m, _ in calls] == ["gemini-3.5-flash", gemini.CHAT_FAST_MODEL]   # lite — вторая
+    assert all(t <= gemini.CHAT_MODEL_TIMEOUT for _, t in calls)                    # не 40 секунд

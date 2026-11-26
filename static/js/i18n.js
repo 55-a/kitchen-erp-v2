@@ -199,6 +199,8 @@
       ai_hello_title: "Привет! Я ИИ-помощник 👋", ai_hello_text: "Вижу склад, цены, рецепты и последние закупки. Спрашивайте свободно.",
       ai_q1: "Что купить на плов на 50 порций?", ai_q2: "Чего не хватает на складе?",
       ai_q3: "Сколько потратили на закупки?", ai_q4: "Какие продукты самые дорогие?",
+      ai_slow: "ИИ думает дольше обычного — Google сейчас загружен…", ai_busy: "ИИ сейчас перегружен 😔 Попробуйте ещё раз через минуту.",
+      ai_timeout: "ИИ не ответил вовремя. Проверьте интернет и попробуйте ещё раз.",
     },
     en: {
       greet_morning: "Good morning", greet_day: "Good afternoon", greet_evening: "Good evening",
@@ -237,6 +239,8 @@
       ai_hello_title: "Hi! I'm your AI assistant 👋", ai_hello_text: "I can see stock, prices, recipes and recent purchases. Ask freely.",
       ai_q1: "What to buy for plov for 50 portions?", ai_q2: "What's missing in stock?",
       ai_q3: "How much have we spent on purchases?", ai_q4: "Which products are the most expensive?",
+      ai_slow: "The AI is taking longer than usual — Google is busy right now…", ai_busy: "The AI is overloaded right now 😔 Please try again in a minute.",
+      ai_timeout: "The AI did not answer in time. Check your connection and try again.",
     },
     uz: {
       greet_morning: "Xayrli tong", greet_day: "Xayrli kun", greet_evening: "Xayrli kech",
@@ -275,6 +279,8 @@
       ai_hello_title: "Salom! Men SI-yordamchiman 👋", ai_hello_text: "Ombor, narxlar, retseptlar va oxirgi xaridlarni ko'raman. Bemalol so'rang.",
       ai_q1: "50 porsiya osh uchun nima sotib olish kerak?", ai_q2: "Omborda nima yetishmaydi?",
       ai_q3: "Xaridlarga qancha sarfladik?", ai_q4: "Qaysi mahsulotlar eng qimmat?",
+      ai_slow: "SI odatdagidan uzoqroq o'ylayapti — Google hozir band…", ai_busy: "SI hozir band 😔 Bir daqiqadan keyin qayta urinib ko'ring.",
+      ai_timeout: "SI vaqtida javob bermadi. Internetni tekshirib, qayta urinib ko'ring.",
     },
     zh: {
       greet_morning: "早上好", greet_day: "下午好", greet_evening: "晚上好",
@@ -313,6 +319,8 @@
       ai_hello_title: "你好！我是 AI 助手 👋", ai_hello_text: "我能看到库存、价格、菜谱和最近的采购。请随意提问。",
       ai_q1: "做 50 份抓饭需要买什么？", ai_q2: "库存里缺什么？",
       ai_q3: "采购一共花了多少钱？", ai_q4: "哪些食材最贵？",
+      ai_slow: "AI 思考时间比平时长 — Google 当前繁忙…", ai_busy: "AI 当前繁忙 😔 请一分钟后再试。",
+      ai_timeout: "AI 未及时回复。请检查网络后重试。",
     },
   };
   Object.keys(UI).forEach((code) => Object.assign(DICT[code], UI[code]));
