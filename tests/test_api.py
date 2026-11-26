@@ -403,6 +403,20 @@ async def test_entry_page_is_served(client):
     assert r.status_code == 200 and "role-grid" in r.text
 
 
+async def test_pages_load_fresh_files_after_update(client):
+    """После обновления Telegram не должен показывать старую копию: у CSS/JS метка версии и no-cache."""
+    from api.main import ASSET_VERSION
+
+    for path in ("/app", "/app/cook", "/app/owner", "/app/purchaser", "/app/client"):
+        r = await client.get(path)
+        assert r.status_code == 200 and "no-store" in r.headers["cache-control"]
+        assert f'/static/js/app.js?v={ASSET_VERSION}"' in r.text
+        assert f'/static/css/style.css?v={ASSET_VERSION}"' in r.text
+        assert '/static/js/app.js"' not in r.text and '/static/js/i18n.js"' not in r.text
+    r = await client.get(f"/static/js/app.js?v={ASSET_VERSION}")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+
+
 # ------------------------------------------------------------------ Этап 1: справочники, инвентаризация, техкарты, факт партии
 
 async def test_purchaser_adds_new_product_and_buys_it(client):

@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
+import re
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.auth import TelegramAuthMiddleware
@@ -67,7 +70,38 @@ app.add_middleware(TelegramAuthMiddleware)
 for r in (stats, stock, recipes, batch, purchase, ai, client, me, plan, kitchen):
     app.include_router(r.router)
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class FreshStaticFiles(StaticFiles):
+    """CSS/JS: браузер Telegram обязан каждый раз сверяться с сервером (по ETag — это быстро),
+    иначе после обновления он показывает старую сохранённую копию приложения."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/static", FreshStaticFiles(directory=STATIC_DIR), name="static")
+
+NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+
+
+def _asset_version() -> str:
+    """Метка версии по содержимому CSS/JS: меняется при каждом обновлении файлов."""
+    digest = hashlib.md5()
+    for p in sorted(STATIC_DIR.rglob("*")):
+        if p.is_file():
+            digest.update(p.read_bytes())
+    return digest.hexdigest()[:10]
+
+
+ASSET_VERSION = _asset_version()
+
+
+@lru_cache(maxsize=None)
+def _render_page(name: str) -> str:
+    """HTML страницы со ссылками вида /static/js/app.js?v=<версия> — новая версия = новый адрес файла."""
+    html = (TEMPLATES_DIR / f"{name}.html").read_text(encoding="utf-8")
+    return re.sub(r'(/static/[^"\'?\s]+\.(?:js|css))(["\'])', rf"\1?v={ASSET_VERSION}\2", html)
 
 
 @app.exception_handler(ServiceError)
@@ -96,14 +130,14 @@ async def root() -> RedirectResponse:
 
 
 @app.get("/app")
-async def mini_app_entry() -> FileResponse:
+async def mini_app_entry() -> HTMLResponse:
     """Экран «Войти»: кнопка меню бота открывает его, дальше — экран своей роли или выбор роли."""
-    return FileResponse(TEMPLATES_DIR / "index.html", media_type="text/html", headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(_render_page("index"), headers=NO_CACHE)
 
 
 @app.get("/app/{role}")
-async def mini_app(role: str) -> FileResponse:
+async def mini_app(role: str) -> HTMLResponse:
     """Отдаёт HTML Mini App. Сама страница публичная — данные защищены на уровне /api."""
     if role not in MINI_APPS:
         raise HTTPException(404, "Not found")
-    return FileResponse(TEMPLATES_DIR / f"{role}.html", media_type="text/html", headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(_render_page(role), headers=NO_CACHE)
