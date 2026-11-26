@@ -35,13 +35,9 @@ def effective_role(user: User | None) -> str | None:
 
 
 def can_take_role(telegram_id: int, role: str) -> bool:
-    """Может ли пользователь выбрать роль в /start."""
-    settings = get_settings()
-    if role == "owner":
-        return telegram_id in settings.owner_ids
-    if role in {"cook", "purchaser"}:
-        return not settings.staff_ids or telegram_id in settings.staff_ids or telegram_id in settings.owner_ids
-    return role == "client"
+    """Сам выбирает себе роль только владелец (проверить кабинеты). Остальным роль назначает
+    владелец в приложении: «👥 Команда»."""
+    return telegram_id in get_settings().owner_ids and role in {"owner", "cook", "purchaser", "client"}
 
 
 async def linked_client(session: AsyncSession, telegram_id: int) -> Client | None:

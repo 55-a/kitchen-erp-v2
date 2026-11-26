@@ -20,6 +20,7 @@ os.environ["STAFF_IDS"] = ""
 os.environ["RUN_BOT_IN_API"] = "false"
 os.environ["WEBAPP_URL"] = "https://example.test"
 os.environ["GEMINI_API_KEY"] = ""
+os.environ["NOTIFY_DISABLED"] = "1"   # бот не пишет в настоящий Telegram
 
 import pytest_asyncio  # noqa: E402
 

@@ -80,9 +80,10 @@
     </section>
 
     <!-- ===== Быстрые действия ===== -->
-    <section class="quick-actions">
+    <section class="quick-actions four">
       <button type="button" class="quick-action" id="qa-operation"><span class="qa-icon">➕</span><span data-i18n="qa_operation"></span></button>
       <button type="button" class="quick-action" id="qa-export"><span class="qa-icon">⬇️</span><span data-i18n="qa_export"></span></button>
+      <button type="button" class="quick-action" id="qa-team"><span class="qa-icon">👥</span><span data-i18n="qa_team"></span></button>
       <button type="button" class="quick-action" id="qa-settings"><span class="qa-icon">⚙️</span><span data-i18n="qa_settings"></span></button>
     </section>
 
@@ -430,6 +431,77 @@
     }
     $("qa-settings").addEventListener("click", openSettings);
 
+    // ================= 👥 Команда: владелец назначает роли =================
+    // Человек открыл бота → владельцу пришло «Новый человек» → здесь выбираем ему роль →
+    // бот пишет человеку, и «ОТКРЫТЬ» ведёт его сразу в свой кабинет.
+    const ASSIGNABLE = ["cook", "purchaser", "client"];
+
+    function teamRow(p, clients) {
+      const row = document.createElement("div");
+      row.className = "team-row";
+      const roleBadge = p.is_owner
+        ? `<span class="badge info">👑 ${esc(t("team_owner"))}</span>`
+        : p.role ? `<span class="badge ok">${esc(t("role_" + p.role + "_name"))}${p.client ? " · " + esc(p.client) : ""}</span>`
+        : `<span class="badge warning">⏳ ${esc(t("team_waiting"))}</span>`;
+      row.innerHTML = `
+        <div class="team-head">
+          <div class="avatar">${esc(initials(p.name))}</div>
+          <div class="grow"><div class="title">${esc(p.name)}</div>
+            <div class="hint">ID ${p.telegram_id}${p.since ? " · " + esc(t("team_since", { date: fmtDate(p.since) })) : ""}</div></div>
+          ${roleBadge}
+        </div>`;
+      if (p.is_owner) return row;
+      const form = document.createElement("div");
+      form.className = "team-form";
+      form.innerHTML = `
+        <select name="role">
+          <option value="">${esc(t("team_no_role"))}</option>
+          ${ASSIGNABLE.map((r) => `<option value="${r}" ${p.role === r ? "selected" : ""}>${esc(t("role_" + r + "_name"))}</option>`).join("")}
+        </select>
+        <select name="client" ${p.role === "client" ? "" : "hidden"}>
+          <option value="">${esc(t("team_client_company"))}…</option>
+          ${clients.map((c) => `<option value="${esc(c.name)}" ${p.client === c.name ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+        </select>
+        <button type="button" class="btn">${esc(t("save"))}</button>`;
+      const roleSel = form.querySelector('[name="role"]');
+      const clientSel = form.querySelector('[name="client"]');
+      roleSel.addEventListener("change", () => { clientSel.hidden = roleSel.value !== "client"; });
+      const btn = form.querySelector("button");
+      btn.addEventListener("click", async () => {
+        const role = roleSel.value || null;
+        if (role === "client" && !clientSel.value) return toast(t("err_client_required"), "error");
+        btn.disabled = true;
+        try {
+          const saved = await api(`/api/team/${p.telegram_id}`, { method: "PUT", json: { role, client: role === "client" ? clientSel.value : null } });
+          toast(t("team_saved"));
+          row.replaceWith(teamRow(saved, clients));
+        } catch (e) {
+          toast(errorText(e), "error");
+          btn.disabled = false;
+        }
+      });
+      row.appendChild(form);
+      return row;
+    }
+
+    async function openTeam() {
+      const body = document.createElement("div");
+      body.innerHTML = `<p class="hint" style="margin-top:0">${esc(t("team_hint"))}</p>` + App.skeletonHtml(3);
+      modal({ title: "👥 " + t("team_title"), body });
+      try {
+        const data = await api("/api/team");
+        body.innerHTML = `<p class="hint" style="margin-top:0">${esc(t("team_hint"))}</p>`;
+        if (!data.people.some((p) => !p.is_owner)) {
+          body.insertAdjacentHTML("beforeend", `<div class="empty">${esc(t("team_empty"))}</div>`);
+        }
+        data.people.forEach((p) => body.appendChild(teamRow(p, data.clients)));
+      } catch (e) {
+        body.innerHTML = `<div class="error-box">${esc(errorText(e))}</div>`;
+      }
+    }
+    $("qa-team").addEventListener("click", openTeam);
+
+
     // ================= Клиент: его поставки и оплаты (по нажатию на карточку) =================
     async function openClient(name) {
       const body = document.createElement("div");
@@ -701,12 +773,13 @@
     $("plan-edit").addEventListener("click", openPlanEditor);
     $("plan-how").addEventListener("click", () => explainPlan("forecast"));
 
-    // Кнопка «🤝 Клиенты» в боте открывает ?tab=clients — прокручиваем к клиентам
+    // Кнопка «🤝 Клиенты» в боте открывает ?tab=clients — прокручиваем к клиентам; ?tab=team — «Команда»
     const startTab = new URLSearchParams(location.search).get("tab");
 
     (async function start() {
       await Promise.all([loadClientList(), loadStats(), loadPlan()]);
       if (startTab === "clients") $("clients-section").scrollIntoView({ behavior: "smooth", block: "start" });
+      if (startTab === "team") openTeam();   // из уведомления «Новый человек» в боте
     })();
   </script>
 </body>

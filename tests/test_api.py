@@ -12,6 +12,7 @@ import pytest_asyncio
 from api.auth import InitDataError, validate_init_data
 from api.main import app
 from api.models import Client, ClientDelivery, Payment, Recipe, RecipeIngredient, Stock, User
+from bot.translations import t
 from tests.conftest import (
     CLIENT_ID,
     COOK_ID,
@@ -389,13 +390,57 @@ async def test_manual_plan_overrides_auto_and_can_be_reset(client):
 
 # ------------------------------------------------------------------ Вход: выбор роли в приложении
 
-async def test_role_choice_in_app_follows_bot_rules(client, db):
+async def test_only_owner_switches_own_role_in_app(client, db):
     r = await client.post("/api/me/role", json={"role": "cook"}, headers=auth_headers(CLIENT_ID))
-    assert r.status_code == 200
+    assert r.status_code == 403                                   # роль назначает владелец, не сам человек
     me = (await client.get("/api/me", headers=auth_headers(CLIENT_ID))).json()
-    assert me["role"] == "cook"
-    r = await client.post("/api/me/role", json={"role": "owner"}, headers=auth_headers(CLIENT_ID))
-    assert r.status_code == 403                                   # владелец — только из OWNER_IDS
+    assert me["role"] == "client" and me["can_switch"] is False
+    r = await client.post("/api/me/role", json={"role": "cook"}, headers=auth_headers(OWNER_ID))
+    assert r.status_code == 200                                   # владелец проверяет кабинет повара
+    me = (await client.get("/api/me", headers=auth_headers(OWNER_ID))).json()
+    assert me["role"] == "cook" and me["can_switch"] is True
+
+
+async def test_newcomer_waits_and_owner_assigns_role(client, db):
+    """«ОТКРЫТЬ» → новый человек ждёт роль → владелец назначает в «Команде» → бот сообщает → кабинет."""
+    from api.notify import SENT
+
+    SENT.clear()
+    newcomer = 77
+    me = (await client.get("/api/me", headers=auth_headers(newcomer))).json()
+    assert me["role"] is None and me["can_switch"] is False
+    assert [m["chat_id"] for m in SENT] == [OWNER_ID] and "77" in SENT[0]["text"]
+    await client.get("/api/me", headers=auth_headers(newcomer))   # второй раз — без повторного уведомления
+    assert len(SENT) == 1
+
+    oh = auth_headers(OWNER_ID)
+    assert (await client.get("/api/team", headers=auth_headers(COOK_ID))).status_code == 403
+    team = (await client.get("/api/team", headers=oh)).json()
+    assert team["people"][0]["telegram_id"] == newcomer and team["people"][0]["role"] is None   # ждущие — сверху
+    assert {c["name"]: c["linked"] for c in team["clients"]} == {"FOYDALI FOOD GROUP": True, "NO NAMELA": False}
+
+    r = await client.put(f"/api/team/{newcomer}", json={"role": "cook"}, headers=oh)
+    assert r.status_code == 200 and r.json()["role"] == "cook"
+    assert (await client.get("/api/me", headers=auth_headers(newcomer))).json()["role"] == "cook"
+    assert SENT[-1]["chat_id"] == newcomer and SENT[-1]["button_url"] == "https://example.test/app?lang=ru"
+
+    # Клиент: обязательно компания; привязка переезжает, старая снимается
+    r = await client.put(f"/api/team/{newcomer}", json={"role": "client"}, headers=oh)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "client_required"
+    r = await client.put(f"/api/team/{newcomer}", json={"role": "client", "client": "NO NAMELA"}, headers=oh)
+    assert r.status_code == 200 and r.json()["client"] == "NO NAMELA"
+    inv = await client.get("/api/client/invoice", headers=auth_headers(newcomer))
+    assert inv.status_code == 200 and inv.json()["client"] == "NO NAMELA"
+    r = await client.put(f"/api/team/{newcomer}", json={"role": "purchaser"}, headers=oh)
+    team = (await client.get("/api/team", headers=oh)).json()
+    assert {c["name"]: c["linked"] for c in team["clients"]}["NO NAMELA"] is False
+
+    r = await client.put(f"/api/team/{newcomer}", json={"role": None}, headers=oh)
+    assert r.json()["role"] is None and SENT[-1]["text"] == t("ru", "role_removed")
+    assert (await client.put(f"/api/team/{OWNER_ID}", json={"role": "cook"}, headers=oh)).json()["detail"]["code"] == "owner_fixed"
+    assert (await client.put("/api/team/999", json={"role": "cook"}, headers=oh)).status_code == 404
+    assert (await client.put(f"/api/team/{newcomer}", json={"role": "owner"}, headers=oh)).status_code == 400
+
 
 
 async def test_entry_page_is_served(client):

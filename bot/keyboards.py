@@ -77,15 +77,24 @@ ROLE_BUTTONS: dict[str, list[tuple[str, str | None]]] = {
 }
 
 
-def role_menu(role: str, lang: str) -> InlineKeyboardMarkup:
-    """Меню роли: кнопки открывают нужную вкладку Mini App."""
+def role_menu(role: str, lang: str, can_switch: bool = True) -> InlineKeyboardMarkup:
+    """Меню роли: кнопки открывают нужную вкладку Mini App. «Сменить роль» — только владельцу."""
     rows: list[list[InlineKeyboardButton]] = []
     for key, tab in ROLE_BUTTONS.get(role, []):
         btn = _webapp_button(t(lang, key), role, lang, tab)
         if btn:
             rows.append([btn])
-    rows.append([InlineKeyboardButton(text=t(lang, "btn_change_role"), callback_data="change_role")])
+    if can_switch:
+        rows.append([InlineKeyboardButton(text=t(lang, "btn_change_role"), callback_data="change_role")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def enter_keyboard(lang: str) -> InlineKeyboardMarkup | None:
+    """Одна кнопка входа в приложение (для тех, кто ждёт роль)."""
+    url = entry_url(lang)
+    if not url:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t(lang, "btn_enter_app"), web_app=WebAppInfo(url=url))]])
 
 
 def receipt_item_keyboard(lang: str, draft_id: int, idx: int) -> InlineKeyboardMarkup:

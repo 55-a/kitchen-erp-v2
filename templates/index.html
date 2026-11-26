@@ -10,9 +10,10 @@
 </head>
 <body>
   <!--
-    Экран «Войти». Его открывает синяя кнопка меню бота.
-    Если роль уже выбрана — сразу переходим на её экран; если нет (или нажали «Сменить роль»,
-    ?choose=1) — показываем карточки ролей. Права проверяет сервер: POST /api/me/role.
+    Экран входа. Его открывают «ОТКРЫТЬ» в списке чатов (Main Mini App) и кнопка меню бота «Войти».
+    Если роль уже есть — сразу переходим на её экран. Роли назначает владелец («👥 Команда»);
+    человек без роли видит «ждём роль». Владелец может выбрать любую роль (проверить кабинеты:
+    ?choose=1). Права проверяет сервер: POST /api/me/role.
   -->
   <main class="app">
     <header class="topbar">
@@ -35,6 +36,15 @@
         <button type="button" class="role-card" data-role="client"><span class="r-icon">🤝</span><span class="r-name" data-i18n="role_client_name"></span><span class="r-hint" data-i18n="role_client_hint"></span></button>
       </div>
     </section>
+
+    <!-- Человек без роли: ждёт, пока владелец назначит роль в «👥 Команда» -->
+    <section class="card" id="await" hidden style="text-align:center">
+      <div style="font-size:44px;line-height:1.2">⏳</div>
+      <h2 style="margin:8px 0" data-i18n="await_title"></h2>
+      <p class="hint" data-i18n="await_text"></p>
+      <p class="hint"><span data-i18n="await_id"></span>: <b class="num" id="await-id">—</b></p>
+      <button type="button" class="btn secondary" id="await-refresh" style="margin-top:8px">🔄 <span data-i18n="await_refresh"></span></button>
+    </section>
   </main>
 
   <script src="/static/js/i18n.js"></script>
@@ -53,6 +63,13 @@
       location.replace(`/app/${role}?lang=${encodeURIComponent(I18N.lang)}`);
     }
 
+    function showAwait(me) {
+      $("loading").hidden = true;
+      $("roles").hidden = true;
+      $("await").hidden = false;
+      $("await-id").textContent = me.telegram_id;
+    }
+
     function showRoles(current) {
       $("loading").hidden = true;
       $("roles").hidden = false;
@@ -64,9 +81,13 @@
       if (name) $("hello").textContent = `👋 ${t("greet_hello")}, ${name}`;
       let me = null;
       try { me = await api("/api/me"); } catch (e) { /* вне Telegram — просто покажем роли */ }
-      if (me && me.role && ROLES.includes(me.role) && !params.get("choose")) return go(me.role);
+      const canSwitch = !me || me.can_switch;          // роль себе выбирает только владелец
+      if (me && me.role && ROLES.includes(me.role) && !(params.get("choose") && canSwitch)) return go(me.role);
+      if (!canSwitch) return showAwait(me);           // ждём, пока владелец назначит роль
       showRoles(me && me.role);
     })();
+
+    $("await-refresh").addEventListener("click", () => location.reload());
 
     $("roles").addEventListener("click", async (ev) => {
       const card = ev.target.closest("[data-role]");

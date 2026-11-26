@@ -724,6 +724,55 @@
   };
   Object.keys(UI4).forEach((code) => Object.assign(DICT[code], UI4[code]));
 
+  /** Команда: роли назначает владелец; экран «ждём роль» */
+  const UI5 = {
+    ru: {
+      qa_team: "Команда", team_title: "Команда",
+      team_hint: "Все, кто открывал бота. Выберите человеку роль — бот сообщит ему, и по кнопке «ОТКРЫТЬ» у него сразу откроется свой кабинет.",
+      team_waiting: "ждёт роль", team_owner: "Владелец", team_no_role: "— без роли —", team_client_company: "Компания клиента",
+      team_since: "с {date}", team_saved: "Сохранено — бот сообщил человеку",
+      team_empty: "Пока никто, кроме вас, не открывал бота. Отправьте человеку ссылку на бота — после «ОТКРЫТЬ» или /start он появится здесь.",
+      err_owner_fixed: "Роль владельца задаётся в настройках сервера", err_client_required: "Выберите компанию клиента", err_user_not_found: "Человек не найден",
+      await_title: "Ждём, когда владелец назначит роль",
+      await_text: "Владелец уже получил уведомление. Как только он выберет вам роль, бот напишет — и здесь откроется ваш кабинет.",
+      await_id: "Ваш ID", await_refresh: "Проверить ещё раз",
+    },
+    en: {
+      qa_team: "Team", team_title: "Team",
+      team_hint: "Everyone who opened the bot. Pick a role for a person — the bot will tell them, and “OPEN” will take them straight to their workspace.",
+      team_waiting: "waiting", team_owner: "Owner", team_no_role: "— no role —", team_client_company: "Client company",
+      team_since: "since {date}", team_saved: "Saved — the bot told the person",
+      team_empty: "Nobody but you has opened the bot yet. Send the person a link to the bot — after “OPEN” or /start they'll appear here.",
+      err_owner_fixed: "The owner role is set in the server settings", err_client_required: "Choose the client company", err_user_not_found: "Person not found",
+      await_title: "Waiting for the owner to assign your role",
+      await_text: "The owner has been notified. As soon as they pick your role, the bot will message you — and your workspace will open here.",
+      await_id: "Your ID", await_refresh: "Check again",
+    },
+    uz: {
+      qa_team: "Jamoa", team_title: "Jamoa",
+      team_hint: "Botni ochgan barcha odamlar. Odamga rol tanlang — bot unga xabar beradi va «OCHISH» tugmasi darhol uning kabinetini ochadi.",
+      team_waiting: "rol kutmoqda", team_owner: "Egasi", team_no_role: "— rolsiz —", team_client_company: "Mijoz kompaniyasi",
+      team_since: "{date} dan", team_saved: "Saqlandi — bot odamga xabar berdi",
+      team_empty: "Sizdan boshqa hech kim botni ochmagan. Odamga bot havolasini yuboring — «OCHISH» yoki /start dan so'ng u shu yerda paydo bo'ladi.",
+      err_owner_fixed: "Egasi roli server sozlamalarida belgilanadi", err_client_required: "Mijoz kompaniyasini tanlang", err_user_not_found: "Odam topilmadi",
+      await_title: "Egasi rol berishini kutyapmiz",
+      await_text: "Egasiga xabar yuborildi. U sizga rol tanlashi bilan bot yozadi — va shu yerda kabinetingiz ochiladi.",
+      await_id: "Sizning ID", await_refresh: "Yana tekshirish",
+    },
+    zh: {
+      qa_team: "团队", team_title: "团队",
+      team_hint: "所有打开过机器人的人。给他选择角色 — 机器人会通知他，点击“打开”就会直接进入他的工作台。",
+      team_waiting: "等待角色", team_owner: "老板", team_no_role: "— 无角色 —", team_client_company: "客户公司",
+      team_since: "自 {date}", team_saved: "已保存 — 机器人已通知对方",
+      team_empty: "除了您还没有人打开过机器人。把机器人链接发给对方 — 点击“打开”或 /start 后他会出现在这里。",
+      err_owner_fixed: "老板角色在服务器设置中指定", err_client_required: "请选择客户公司", err_user_not_found: "找不到此人",
+      await_title: "等待老板分配角色",
+      await_text: "已通知老板。他给您选好角色后，机器人会通知您 — 这里就会打开您的工作台。",
+      await_id: "您的 ID", await_refresh: "再次检查",
+    },
+  };
+  Object.keys(UI5).forEach((code) => Object.assign(DICT[code], UI5[code]));
+
   /**
    * Узбекский на кириллице (код "oz") строится из латинского автоматически —
    * тот же алгоритм, что в bot/uz_cyrillic.py (бот и PDF-акт).

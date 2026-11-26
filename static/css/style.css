@@ -1017,3 +1017,17 @@ th.right, td.right { text-align: right; }
 .price-row { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
 .price-row label { white-space: nowrap; }
 .price-row input { min-height: 44px; }
+
+/* ===== 27. Команда (владелец назначает роли) ===== */
+.quick-actions.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 720px) { .quick-actions.four { grid-template-columns: repeat(4, minmax(0, 160px)); } }
+.team-row { padding: 12px 0; }
+.team-row + .team-row { border-top: 1px solid var(--border); }
+.team-head { display: flex; align-items: center; gap: 12px; }
+.team-head .grow { min-width: 0; flex: 1; }
+.team-head .title { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-head .hint { font-size: 13px; color: var(--text-muted); }
+.team-head .badge { flex-shrink: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-form { display: grid; gap: 8px; margin-top: 10px; }
+.team-form select { min-height: 44px; font-size: 15px; }
+.team-form .btn { min-height: 44px; }
