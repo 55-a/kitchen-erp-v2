@@ -1031,3 +1031,37 @@ th.right, td.right { text-align: right; }
 .team-form { display: grid; gap: 8px; margin-top: 10px; }
 .team-form select { min-height: 44px; font-size: 15px; }
 .team-form .btn { min-height: 44px; }
+
+/* ===== 28. Простой экран повара: шаги дня, большие − / +, рецепты в архиве ===== */
+.lunch-head .lh-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.lunch-head .lh-row:last-of-type { border-bottom: 0; }
+.lunch-head .lh-row .badge { margin-left: 6px; }
+.steps { display: grid; gap: 10px; margin-top: 12px; }
+.step { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px; }
+.step.locked { opacity: 0.45; }
+.step.active { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.step-head { display: flex; align-items: center; gap: 12px; }
+.step-num { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0;
+  font-weight: 800; background: var(--bg-soft); color: var(--text-muted); }
+.step.active .step-num { background: var(--primary); color: #fff; }
+.step.done .step-num { background: var(--success); color: #fff; }
+.step-title { font-size: 17px; font-weight: 700; }
+.step-body { display: grid; gap: 12px; margin-top: 12px; }
+.dish-list { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dish-chip { background: var(--primary-soft); color: #c7d2fe; border-radius: 999px; padding: 8px 14px; font-weight: 600; }
+.stepper { display: grid; grid-template-columns: 64px 1fr 64px; gap: 8px; align-items: center; }
+.stepper input { text-align: center; font-size: 28px; font-weight: 800; min-height: 64px; font-variant-numeric: tabular-nums; }
+.st-btn { min-height: 64px; border-radius: var(--radius); border: 1px solid var(--border-strong); background: var(--bg-soft);
+  color: var(--text); font-size: 30px; font-weight: 700; cursor: pointer; }
+.st-btn:active { transform: scale(0.96); }
+.deliver-row { display: grid; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.total-line { text-align: right; font-size: 15px; }
+.center { text-align: center; }
+.link-btn { background: none; border: 0; color: var(--primary); font-size: 15px; cursor: pointer; padding: 6px 4px; text-decoration: underline; }
+.link-btn.undo { justify-self: center; color: var(--text-muted); margin-top: 4px; }
+.day-done { text-align: center; }
+.day-done .dd-title { font-size: 22px; font-weight: 800; margin-bottom: 4px; }
+.list-item.pick.picked { border-color: var(--success); background: var(--success-soft); }
+.pick-mark { font-size: 22px; }
+.chips.wrap { flex-wrap: wrap; overflow: visible; }
+.recipe-card.is-archived { opacity: 0.6; }

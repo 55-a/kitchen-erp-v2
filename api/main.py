@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from api.auth import TelegramAuthMiddleware
 from api.config import get_settings
 from api.database import init_db
-from api.routers import ai, batch, client, kitchen, me, plan, purchase, recipes, stats, stock, team
+from api.routers import ai, batch, client, kitchen, lunch, me, plan, purchase, recipes, stats, stock, team
 from api.services import ServiceError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Kuxnya NVGR ERP", version="1.0.0", lifespan=lifespan)
 app.add_middleware(TelegramAuthMiddleware)
 
-for r in (stats, stock, recipes, batch, purchase, ai, client, me, plan, kitchen, team):
+for r in (stats, stock, recipes, batch, purchase, ai, client, me, plan, kitchen, lunch, team):
     app.include_router(r.router)
 
 class FreshStaticFiles(StaticFiles):

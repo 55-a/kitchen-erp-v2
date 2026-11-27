@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -63,6 +63,7 @@ def recipe_to_dict(r: Recipe, has_photo: bool) -> dict:
         "category": r.category or "main",
         "shelf_life_hours": r.shelf_life_hours or 24,
         "version": r.version or 1,
+        "archived": bool(r.archived),
         "has_photo": has_photo,
         "base_yield": qty(base_yield),
         "cost_per_base": money(cost_per_base),
@@ -77,10 +78,13 @@ async def _photo_ids(session: AsyncSession) -> set[int]:
 
 @router.get("/recipes")
 async def get_recipes(
+    archived: bool = Query(False, description="true — только рецепты из архива"),
     user: AuthUser = Depends(require_roles("cook")),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
-    recipes = (await session.execute(select(Recipe).order_by(Recipe.name))).scalars().all()
+    """Актуальные рецепты (или архив). Архив не удаляет рецепт: его можно вернуть одним нажатием."""
+    cond = Recipe.archived.is_(True) if archived else Recipe.archived.isnot(True)
+    recipes = (await session.execute(select(Recipe).where(cond).order_by(Recipe.name))).scalars().all()
     photos = await _photo_ids(session)
     return [recipe_to_dict(r, r.id in photos) for r in recipes]
 
@@ -124,9 +128,12 @@ def _composition(ings) -> list[tuple]:
 async def _check_name(session: AsyncSession, name: str, exclude_id: int | None = None) -> str:
     name = " ".join(name.split())
     # casefold в Python: lower() в SQLite не понимает кириллицу
-    rows = (await session.execute(select(Recipe.id, Recipe.name))).all()
-    if any(rid != exclude_id and " ".join(n.split()).casefold() == name.casefold() for rid, n in rows):
-        raise ServiceError(409, "recipe_exists", "Техкарта с таким названием уже есть")
+    rows = (await session.execute(select(Recipe.id, Recipe.name, Recipe.archived))).all()
+    for rid, n, archived in rows:
+        if rid != exclude_id and " ".join(n.split()).casefold() == name.casefold():
+            if archived:
+                raise ServiceError(409, "recipe_in_archive", "Рецепт с таким названием лежит в архиве — верните его оттуда")
+            raise ServiceError(409, "recipe_exists", "Рецепт с таким названием уже есть")
     return name
 
 
@@ -169,6 +176,27 @@ async def update_recipe(
     recipe = await session.get(Recipe, recipe_id, populate_existing=True)
     return recipe_to_dict(recipe, recipe_id in await _photo_ids(session))
 
+
+
+class ArchiveIn(BaseModel):
+    archived: bool = True
+
+
+@router.post("/recipes/{recipe_id}/archive")
+async def archive_recipe(
+    recipe_id: int,
+    body: ArchiveIn,
+    user: AuthUser = Depends(require_roles("cook")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """«В архив» вместо удаления: рецепт пропадает из списка, история партий и отчёты не ломаются.
+    archived=false — вернуть из архива."""
+    recipe = await session.get(Recipe, recipe_id)
+    if recipe is None:
+        raise HTTPException(404, "Recipe not found")
+    recipe.archived = body.archived
+    await session.commit()
+    return {"id": recipe.id, "archived": recipe.archived}
 
 @router.post("/recipes/{recipe_id}/photo")
 async def upload_photo(

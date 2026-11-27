@@ -117,6 +117,16 @@
       <div id="shop" class="list"></div>
     </section>
 
+    <!-- ===== Склад: справочник и пересчёт (повар склад не ведёт) ===== -->
+    <section class="card">
+      <div class="card-head" style="margin:0"><h2>📦 <span data-i18n="stock_title"></span></h2></div>
+      <p class="small muted" data-i18n="stock_hint"></p>
+      <div class="row">
+        <button type="button" class="btn secondary" id="stock-raw">🥕 <span data-i18n="qa_raw"></span></button>
+        <button type="button" class="btn secondary" id="stock-inv">📋 <span data-i18n="qa_inventory"></span></button>
+      </div>
+    </section>
+
     <!-- ===== Последние закупки ===== -->
     <section class="card">
       <div class="card-head"><h2 data-i18n="recent_purchases"></h2></div>
@@ -126,6 +136,7 @@
 
   <script src="/static/js/i18n.js"></script>
   <script src="/static/js/app.js"></script>
+  <script src="/static/js/stock-tools.js"></script>
   <script>
     "use strict";
     App.init();
@@ -524,6 +535,8 @@
       updateMainButton();
       if (tab === "ai") setTimeout(() => { $("chat-log").scrollTop = $("chat-log").scrollHeight; }, 50);
     });
+    $("stock-raw").addEventListener("click", () => StockTools.openRaw());
+    $("stock-inv").addEventListener("click", () => StockTools.openInventory());
     loadStock();
     loadRecent();
     loadShopping();

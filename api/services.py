@@ -143,6 +143,7 @@ async def create_batch(
     date: dt.date,
     created_by: int | None,
     items: list[dict] | None = None,
+    strict: bool = True,
 ) -> tuple[Batch, list[dict]]:
     """
     Создаёт партию и списывает продукты со склада.
@@ -151,6 +152,9 @@ async def create_batch(
     Блокируется (400), если чего-то не хватает или у продукта ещё нет цены — иначе
     себестоимость партии была бы неверной (правило из архитектуры).
     Фактический расход каждого продукта сохраняется в batch_items.
+    strict=False — «простой режим» повара: склад повар не ведёт, поэтому нехватка и отсутствие цены
+    не блокируют готовку. Остаток может уйти в минус (его поправит инвентаризация закупщика),
+    продукт без цены считается по 0.
     """
     if planned_yield is None or planned_yield <= 0:
         raise ServiceError(400, "bad_yield", "Плановый выход должен быть больше нуля")
@@ -160,7 +164,7 @@ async def create_batch(
     recipe = await session.get(Recipe, recipe_id)
     if recipe is None:
         raise ServiceError(404, "recipe_not_found", "Рецепт не найден")
-    if not recipe.ingredients:
+    if not recipe.ingredients and strict:
         raise ServiceError(400, "recipe_empty", "В рецепте нет ингредиентов")
 
     factor = Decimal(planned_yield) / Decimal(recipe.base_yield or 1)
@@ -207,7 +211,7 @@ async def create_batch(
         need = dict(planned)
 
     no_price = [stock_by_id[pid].name for pid in need if not Decimal(stock_by_id[pid].price_per_unit or 0)]
-    if no_price:
+    if no_price and strict:
         raise ServiceError(400, "no_price", "У продуктов нет цены — внесите закупку или цену в инвентаризации",
                            {"products": no_price})
 
@@ -221,7 +225,7 @@ async def create_batch(
         for pid, amount in need.items()
         if Decimal(stock_by_id[pid].quantity or 0) < amount
     ]
-    if shortages:
+    if shortages and strict:
         raise ServiceError(400, "insufficient_stock", "Недостаточно продуктов на складе", {"shortages": shortages})
 
     consumed: list[dict] = []

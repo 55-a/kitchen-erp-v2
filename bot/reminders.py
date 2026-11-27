@@ -74,7 +74,7 @@ async def send_leftover_reminders(bot: Bot) -> int:
         kb = None
         if base:
             kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-                text=t(lang, "btn_leftovers"), web_app=WebAppInfo(url=f"{base}/app/cook?lang={lang}&tab=leftovers"))]])
+                text=t(lang, "btn_leftovers"), web_app=WebAppInfo(url=f"{base}/app/cook?lang={lang}"))]])
         try:
             await bot.send_message(u.telegram_id, reminder_text(lang, leftovers), reply_markup=kb)
             sent += 1

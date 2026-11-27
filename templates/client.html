@@ -34,6 +34,19 @@
       </div>
     </div>
 
+    <!-- Заявка на обед: «Завтра нас: N» (повар готовит по сумме заявок) -->
+    <section class="card" id="order-card" hidden>
+      <div class="card-head" style="margin:0 0 6px"><h2>🍽 <span data-i18n="order_title"></span></h2><span class="badge ok" id="order-today"></span></div>
+      <div class="step-title" id="order-question"></div>
+      <div class="stepper" style="margin:10px 0">
+        <button type="button" class="st-btn" data-od="-1" aria-label="minus">−</button>
+        <input type="number" inputmode="numeric" min="0" max="5000" step="1" id="order-n">
+        <button type="button" class="st-btn" data-od="1" aria-label="plus">+</button>
+      </div>
+      <p class="small muted" id="order-hint" style="margin:0 0 10px;white-space:pre-line"></p>
+      <button type="button" class="btn lg" id="order-save" data-i18n="order_save"></button>
+    </section>
+
     <!-- 3 карточки: начислено, оплачено, долг/переплата (цвет зависит от знака) -->
     <section class="kpi-grid">
       <div class="kpi tappable" data-explain="charged">
@@ -219,6 +232,34 @@
       toast(t("menu_pdf_sent"));
     }));
 
+    // ---------- Заявка на обед: «{день}: сколько человек будет обедать?» ----------
+    let order = null;
+    async function loadOrder() {
+      try { order = await api("/api/client/order", { query: scope }); } catch (e) { $("order-card").hidden = true; return; }
+      const n = order.next;
+      $("order-today").textContent = t(order.today.ordered ? "order_today" : "order_today_usual", { n: fmtQty(order.today.portions) });
+      $("order-today").hidden = order.today.weekday > 4;
+      $("order-question").textContent = t("order_question", { day: `${t("wd_" + n.weekday)}, ${fmtDate(n.date)}` });
+      $("order-n").value = n.portions ?? order.usual;
+      const until = new Date(n.deadline).toLocaleString(I18N.lang === "en" ? "en-GB" : "ru-RU",
+        { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tashkent" });
+      $("order-hint").textContent = [t("order_until", { time: until }),
+        n.portions == null ? t("order_usual", { n: fmtQty(order.usual) }) : "", t("order_zero")].filter(Boolean).join("\n");
+      $("order-card").hidden = false;
+    }
+    $("order-card").addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-od]");
+      if (!b) return;
+      $("order-n").value = Math.max(0, (parseInt($("order-n").value, 10) || 0) + Number(b.dataset.od));
+    });
+    $("order-save").addEventListener("click", () => withButton($("order-save"), async () => {
+      const n = parseInt($("order-n").value, 10);
+      if (!(n >= 0)) { toast(t("quantity_required"), "error"); return; }
+      await api("/api/client/order", { method: "PUT", json: { date: order.next.date, portions: n, client: scope.client || null } });
+      toast(t("order_saved", { n: fmtQty(n) }));
+      await loadOrder();
+    }));
+
     // ---------- Выбор компании (только владелец) ----------
     async function initOwnerPicker() {
       let clients;
@@ -234,6 +275,7 @@
         scope.client = picker.value;   // перезагружаем данные новой компании
         loadInvoice();
         loadDeliveries();
+        loadOrder();
       });
     }
 
@@ -258,6 +300,7 @@
     initOwnerPicker().finally(() => {
       loadInvoice();
       loadDeliveries();
+      loadOrder();
       App.initTabs(() => {});
     });
   </script>

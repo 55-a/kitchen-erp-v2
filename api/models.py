@@ -17,6 +17,7 @@ from sqlalchemy import (
     JSON,
     LargeBinary,
     BigInteger,
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -24,6 +25,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -86,6 +88,8 @@ class Recipe(Base):
     category: Mapped[str | None] = mapped_column(String(30), default="main")
     shelf_life_hours: Mapped[int | None] = mapped_column(Integer, default=24)
     version: Mapped[int | None] = mapped_column(Integer, default=1)
+    # В архиве: рецепт не показывается в списке и в выборе блюд, но старые партии его помнят
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     ingredients: Mapped[list["RecipeIngredient"]] = relationship(
@@ -283,3 +287,20 @@ class MenuItem(Base):
     created_by: Mapped[int | None] = mapped_column(BigInteger)
 
     recipe: Mapped[Recipe] = relationship(lazy="selectin")
+
+
+class ClientOrder(Base):
+    """Заявка клиента: сколько человек будет обедать в этот день («Завтра нас: 85»).
+    Повар готовит по сумме заявок + небольшой запас. Без заявки берётся обычное количество клиента."""
+
+    __tablename__ = "client_orders"
+    __table_args__ = (UniqueConstraint("date", "client_name", name="uq_client_order_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    date: Mapped[dt.date] = mapped_column(Date, index=True)
+    client_name: Mapped[str] = mapped_column(String(255), index=True)
+    portions: Mapped[int] = mapped_column(Integer, default=0)
+    updated_by: Mapped[int | None] = mapped_column(BigInteger)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

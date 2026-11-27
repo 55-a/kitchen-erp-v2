@@ -57,6 +57,10 @@ class Settings:
     reminder_hour: int = 17
     # Название нашей фирмы в акте сверки (например «"NOVAGREEN FOODS" MCHJ»). Пусто — «Kuxnya NVGR»
     company_legal_name: str = ""
+    # Заявка клиента на обед: до скольки (по Ташкенту) накануне можно поменять количество
+    order_deadline_hour: int = 17
+    # Запас к сумме заявок, % (на случай, если пришёл кто-то без заявки)
+    lunch_buffer_pct: int = 5
 
     @property
     def async_database_url(self) -> str:
@@ -87,5 +91,7 @@ def get_settings() -> Settings:
         font_dir=os.getenv("FONT_DIR", ""),
         support_telegram=os.getenv("SUPPORT_TELEGRAM", "").strip().lstrip("@"),
         reminder_hour=int(os.getenv("REMINDER_HOUR", "17")),
+        order_deadline_hour=int(os.getenv("ORDER_DEADLINE_HOUR", "17")),
+        lunch_buffer_pct=int(os.getenv("LUNCH_BUFFER_PCT", "5")),
         company_legal_name=os.getenv("COMPANY_LEGAL_NAME", "").strip(),
     )

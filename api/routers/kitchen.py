@@ -451,7 +451,8 @@ async def send_recipes_pdf(
     from api.pdf_generator import build_recipes_pdf
     from bot.translations import t
 
-    recipes = (await session.execute(select(Recipe).order_by(Recipe.category, Recipe.name))).scalars().all()
+    recipes = (await session.execute(
+        select(Recipe).where(Recipe.archived.isnot(True)).order_by(Recipe.category, Recipe.name))).scalars().all()
     pdf = build_recipes_pdf(recipes, await _photos(session, [r.id for r in recipes]), user.language)
     await send_document(user.telegram_id, pdf, f"recipes_{dt.date.today():%Y%m%d}.pdf", t(user.language, "recipes_pdf_caption"))
     return {"ok": True}
