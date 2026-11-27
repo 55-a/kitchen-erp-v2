@@ -151,9 +151,13 @@ async def test_cook_day_steps_and_undo(api, db, monkeypatch):
     assert (await api.post("/api/cook/day/undo", headers=h)).json()["step"] == "deliver"
     async with db() as s:
         assert not (await s.execute(select(ClientDelivery).where(ClientDelivery.date == THU))).scalars().all()
-    assert (await api.post("/api/cook/day/undo", headers=h)).json()["step"] == "cook"
+    day = (await api.post("/api/cook/day/undo", headers=h)).json()
+    assert day["step"] == "cook" and day["can_undo"] is True
     async with db() as s:
         assert (await s.execute(select(Stock.quantity).where(Stock.name == "Рис"))).scalar_one() == Decimal("1")
+    # Защита от ошибок: можно отменить и выбор блюд — назад до самого начала
+    day = (await api.post("/api/cook/day/undo", headers=h)).json()
+    assert day["step"] == "dishes" and day["dishes"] == [] and day["can_undo"] is False
     r = await api.post("/api/cook/day/undo", headers=h)
     assert r.status_code == 400 and r.json()["detail"]["code"] == "nothing_to_undo"
 

@@ -246,7 +246,7 @@ async def day_state(session: AsyncSession) -> dict:
         "remaining": remaining,
         "leftover": leftover,
         "step": step,
-        "can_undo": bool(batches),
+        "can_undo": bool(batches) or bool(dishes),
     }
 
 
@@ -259,7 +259,7 @@ async def get_day(
 
 
 class DishesIn(BaseModel):
-    recipe_ids: list[int] = Field(max_length=8)
+    recipe_ids: list[int] = Field(max_length=8)   # пустой список — снять выбор
 
 
 @router.put("/cook/day/dishes")
@@ -404,11 +404,17 @@ async def post_undo(
     user: AuthUser = Depends(require_roles("cook")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Отменить последний шаг: «осталось» → «отвёз» → «приготовил» (продукты вернутся на склад)."""
+    """Отменить последний шаг: «осталось» → «отвёз» → «приготовил» (продукты вернутся на склад)
+    → «что на обед» (выбор блюд очищается). Защита от ошибок: назад можно дойти до самого начала."""
     today = local_today()
     batches = await _today_batches(session, today)
     if not batches:
-        raise ServiceError(400, "nothing_to_undo", "Отменять нечего")
+        menu = (await session.execute(select(MenuItem).where(MenuItem.date == today))).scalars().all()
+        if not menu:
+            raise ServiceError(400, "nothing_to_undo", "Отменять нечего")
+        await session.execute(delete(MenuItem).where(MenuItem.date == today))
+        await session.commit()
+        return await day_state(session)
     ids = [b.id for b in batches]
     moves = await _movements(session, ids)
     rest = [m for m in moves if m.kind in ("staff", "waste")]

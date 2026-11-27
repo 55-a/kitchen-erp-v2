@@ -1065,3 +1065,4 @@ th.right, td.right { text-align: right; }
 .pick-mark { font-size: 22px; }
 .chips.wrap { flex-wrap: wrap; overflow: visible; }
 .recipe-card.is-archived { opacity: 0.6; }
+.undo-btn { margin-top: 4px; }

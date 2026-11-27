@@ -293,6 +293,8 @@
     }
 
     const STEPS = ["dishes", "cook", "deliver", "leftover"];
+    // Какой шаг отменит «Назад» на текущем этапе
+    const UNDO_WHAT = { cook: "undo_what_dishes", deliver: "undo_what_cooked", leftover: "undo_what_delivered", done: "undo_what_left" };
 
     /** Число с большими кнопками − и + (для повара — почти ничего не печатать) */
     function stepper(name, value) {
@@ -362,7 +364,8 @@
         html = `<div class="card day-done"><div class="dd-title">${esc(t("day_done"))}</div>
           <div class="small muted">${esc(t("day_summary", { cooked: fmtQty(day.cooked), given: fmtQty(day.delivered_total), left: fmtQty(day.leftover) }))}</div></div>` + html;
       }
-      if (day.can_undo) html += `<button type="button" class="link-btn undo" data-do="undo">${esc(t("btn_undo"))}</button>`;
+      // «Назад» видно всегда, когда есть что отменить, и написано, что именно отменится
+      if (day.can_undo) html += `<button type="button" class="btn secondary undo-btn" data-do="undo">↩ ${esc(t("undo_step", { what: t(UNDO_WHAT[day.step]) }))}</button>`;
       $("steps").innerHTML = html;
       updateDeliverTotal();
     }
@@ -388,7 +391,7 @@
       const act = b.dataset.do;
       if (act === "dishes") return pickDishes();
       if (act === "undo") {
-        if (!(await confirm(esc(t("undo_confirm")), { icon: "↩" }))) return;
+        if (!(await confirm(esc(t("undo_confirm_step", { what: t(UNDO_WHAT[day.step]) })), { icon: "↩", okLabel: t("undo_ok") }))) return;
         return send(b, () => api("/api/cook/day/undo", { method: "POST" }), "undone");
       }
       const val = (name) => parseInt(($("steps").querySelector(`[name="${name}"]`) || {}).value, 10) || 0;
@@ -450,7 +453,6 @@
       modal({ title: "🍽 " + t("step_dishes"), body, actions: [
         { label: t("cancel"), kind: "secondary" },
         { label: "💾 " + t("save"), onClick: async () => {
-          if (!chosen.size) { toast(t("err_nothing_to_cook"), "error"); return false; }
           try { day = await api("/api/cook/day/dishes", { method: "PUT", json: { recipe_ids: [...chosen] } }); renderDay(); }
           catch (e) { showError(e); return false; }
         } },
